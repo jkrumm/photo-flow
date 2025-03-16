@@ -1,0 +1,121 @@
+---
+description: photo-flow is a TypeScript CLI tool for managing photography workflow across camera, staging, Immich, and archive locations. It tracks photos through their lifecycle, handling the movement of files between different storage locations while ensuring data integrity.
+globs: **/*.{ts,tsx,js,jsx,json,md}
+---
+# Project Rules
+
+## Description
+
+photo-flow is a TypeScript CLI tool for managing photography workflow across camera, staging, Immich, and archive locations. It tracks photos through their lifecycle, handling the movement of files between different storage locations while ensuring data integrity.
+
+## Glob
+
+**/*.{ts,tsx,js,jsx,json,md}
+
+## Rules
+
+### Architecture
+
+- Command-based CLI using Gluegun
+- TypeScript with strict mode enabled
+- LowDB with JSON storage
+- Functional programming approach where appropriate
+- File-based operations with careful error handling
+- SMB mount handling for network storage
+
+### Code Structure
+
+- **src/commands/**: CLI commands (scan, stage, migrate, clean, status)
+- **src/extensions/**: Gluegun extensions
+- **src/services/**: Business logic for file operations
+- **src/types/**: TypeScript type definitions
+- **src/utils/**: Helper functions
+- **test/**: Test files
+
+### Code Style
+
+- Use TypeScript with strict mode
+- Format with Prettier
+- Lint with ESLint
+- Favor functional programming where appropriate
+- Keep side-effects isolated in clearly named functions
+- Prefer immutable data structures
+
+### Naming Conventions
+
+- Use descriptive names for functions and variables
+- Camel case for variables and functions (myFunction)
+- Pascal case for types and classes (MyType)
+- ALL_CAPS for constants (MAX_RETRY_COUNT)
+
+### File Organization
+
+- One command per file in commands directory
+- Separate service files for scanning, staging, migration logic
+- Utility functions for common operations (file handling, filtering)
+
+### Dependencies
+
+Keep dependencies minimal and focused:
+
+#### Required
+- gluegun: CLI framework
+- lowdb: JSON database
+- glob: File pattern matching
+
+#### Optional
+- chalk: Terminal coloring (use via gluegun.print when possible)
+- cli-table3: Formatted tables output
+- ora: Loading spinners
+- p-queue: Limit concurrent operations
+
+### UI/UX Guidelines
+
+- Provide clear, concise output messages
+- Use visual distinction between info, success, warnings and errors
+- Show progress indicators for long-running operations
+- Use spinners for any operation taking > 1 second
+- Use tables for tabular data with clear headers
+- Use consistent color scheme:
+  - Success: green
+  - Info: blue
+  - Warning: yellow
+  - Error: red
+  - Highlight: cyan
+
+### Database Schema
+
+```typescript
+// Types for our database schema
+interface PhotoRecord {
+  baseFilename: string; // Primary key, filename without extension
+  extensions: string[]; // All file extensions for this base filename
+  locations: {
+    camera: boolean;
+    staging: boolean;
+    immich: boolean;
+    archive: boolean;
+  };
+}
+
+interface Config {
+  paths: {
+    camera: string;
+    staging: string;
+    archive: string;
+    immich: string;
+  };
+  network: {
+    smbServer: string;
+    smbShare: string;
+    mountPoint: string;
+    username?: string;
+    password?: string;
+  };
+}
+
+// Database structure
+interface DbSchema {
+  photos: Record<string, PhotoRecord>;
+  config: Config;
+}
