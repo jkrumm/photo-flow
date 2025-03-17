@@ -142,3 +142,53 @@ Add `--debug` to any command to see detailed information about:
 photo-flow --debug config list
 photo-flow --debug config get paths.camera
 ```
+
+### `photo-flow connect`
+
+Connects to configured SMB shares using macOS's native mounting system.
+
+```bash
+photo-flow connect
+```
+
+Features:
+
+- Uses native macOS SMB mounting via AppleScript
+- Integrates with Keychain for secure credential storage
+- Mounts all configured shares from `.photo-flowrc.js`
+- Shows real-time progress with status indicators
+- Verifies successful mounting of all shares
+
+Example output:
+
+```
+System Status:
+  📸  Camera   ✓ Connected
+  🔄  Staging  ✗ Not Found
+  📦  Archive  ✗ Not Found
+  🖼️  Immich   ✓ Connected
+  🔌  SMB      ✗ Disconnected
+     HDD        ✗ Not Mounted
+     SSD        ✗ Not Mounted
+
+📡 Connecting to SMB shares...
+
+  ✓ Mounted HDD → /Volumes/HDD
+  ✓ Mounted SSD → /Volumes/SSD
+
+✨ All shares mounted successfully!
+```
+
+The command will:
+
+1. Check current mount status of all configured shares
+2. Skip already mounted shares
+3. Mount each unmounted share using AppleScript
+4. Verify successful mounting
+5. Show detailed status for any failed mounts
+
+If any mounts fail, the command will:
+
+- Show which shares failed to mount
+- Display the mount point that was attempted
+- Exit with status code 1

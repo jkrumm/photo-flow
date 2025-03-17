@@ -1,12 +1,20 @@
-import { GluegunCommand } from 'gluegun'
+import { BaseCommand } from '../lib/base-command'
+import { PhotoFlowState } from '../types/state'
 
-const command: GluegunCommand = {
-  name: 'photo-flow',
-  run: async (toolbox) => {
+class DefaultCommand extends BaseCommand {
+  name = 'photo-flow'
+  description = 'Photo workflow management tool'
+  hidden = false
+
+  async runFromProjectRoot(toolbox: any, state: PhotoFlowState): Promise<void> {
     const { print } = toolbox
-
-    print.info('Welcome to your CLI')
-  },
+    print.info(
+      print.colors.cyan('photo-flow - Photography Workflow Management')
+    )
+    print.info(
+      print.colors.dim('Run `photo-flow --help` for available commands')
+    )
+  }
 }
 
-module.exports = command
+module.exports = new DefaultCommand().createCommand()

@@ -145,3 +145,4 @@ data/*.json
 .photo-flow.*.local.json
 .photo-flowrc.local
 .photo-flowrc.*.local
+.DS_Store

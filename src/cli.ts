@@ -1,12 +1,12 @@
 import { build } from 'gluegun'
+import { GluegunToolbox } from 'gluegun'
 
 /**
- * Create the cli and kick it off
+ * Create the CLI and kick it off
  */
-async function run(argv) {
+async function run(argv: string[] = []): Promise<GluegunToolbox> {
   // create a CLI runtime
-  const cli = build()
-    .brand('photo-flow')
+  const cli = build('photo-flow')
     .src(__dirname)
     .plugins('./node_modules', { matching: 'photo-flow-*', hidden: true })
     .help() // provides default for help, h, --help, -h
