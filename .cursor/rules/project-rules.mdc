@@ -1,6 +1,7 @@
 ---
 description: photo-flow is a TypeScript CLI tool for managing photography workflow across camera, staging, Immich, and archive locations. It tracks photos through their lifecycle, handling the movement of files between different storage locations while ensuring data integrity.
 globs: **/*.{ts,tsx,js,jsx,json,md}
+alwaysApply: false
 ---
 # Project Rules
 
@@ -98,24 +99,21 @@ interface PhotoRecord {
   };
 }
 
-interface Config {
-  paths: {
-    camera: string;
-    staging: string;
-    archive: string;
-    immich: string;
-  };
-  network: {
-    smbServer: string;
-    smbShare: string;
-    mountPoint: string;
-    username?: string;
-    password?: string;
-  };
-}
-
 // Database structure
 interface DbSchema {
   photos: Record<string, PhotoRecord>;
-  config: Config;
 }
+```
+
+### Documentation
+
+- All commands must be documented in `docs/commands.md`
+- Command documentation should include:
+  - Command name and description
+  - Available options and arguments
+  - Usage examples
+  - Expected output
+- Keep documentation in sync with code changes
+- Document configuration structures and types
+- Use markdown format with proper code blocks
+- Include command aliases if available
