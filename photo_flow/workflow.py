@@ -121,7 +121,8 @@ class PhotoWorkflow:
 
     def finalize_staging(self, dry_run: bool = False) -> Dict[str, int]:
         """
-        Finalize the staging process by moving approved photos to the final folder.
+        Finalize the staging process by moving approved photos to the final folder,
+        copying them back to the camera for viewing, and cleaning up orphaned RAW files.
 
         Args:
             dry_run (bool): If True, only simulate the finalization without moving files
@@ -131,6 +132,9 @@ class PhotoWorkflow:
         """
         stats = {
             'moved': 0,
+            'copied_to_camera': 0,
+            'orphaned_raws': 0,
+            'deleted_raws': 0,
             'errors': 0
         }
 
@@ -142,11 +146,13 @@ class PhotoWorkflow:
 
         # Count files that would be moved
         stats['moved'] = len(staging_files)
+        stats['copied_to_camera'] = len(staging_files)
 
         # If not dry run, actually move the files
         if not dry_run:
-            # Reset counter for actual move
+            # Reset counters for actual operations
             stats['moved'] = 0
+            stats['copied_to_camera'] = 0
 
             # Create final directory if it doesn't exist
             FINAL_PATH.mkdir(parents=True, exist_ok=True)
@@ -155,7 +161,7 @@ class PhotoWorkflow:
             for jpg_file in staging_files:
                 dst_path = FINAL_PATH / jpg_file.name
 
-                # First copy the file
+                # First copy the file to final folder
                 if self.file_manager.safe_copy(jpg_file, dst_path):
                     # Only increment counter if copy was successful
                     stats['moved'] += 1
@@ -166,6 +172,42 @@ class PhotoWorkflow:
                         stats['errors'] += 1
                 else:
                     stats['errors'] += 1
+
+            # After moving all files to final, copy them back to camera
+            if CAMERA_PATH.exists():
+                for jpg_file in FINAL_PATH.glob('*.JPG'):
+                    camera_dst_path = CAMERA_PATH / jpg_file.name
+                    if self.file_manager.safe_copy(jpg_file, camera_dst_path):
+                        stats['copied_to_camera'] += 1
+                    else:
+                        stats['errors'] += 1
+
+            # Clean up orphaned RAW files
+            if RAWS_PATH.exists() and FINAL_PATH.exists():
+                # Get all JPGs in the final folder
+                final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+
+                # Extract base filenames (without extension) from final JPGs
+                final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+
+                # Get all RAFs in the RAWs folder
+                raw_files = list(RAWS_PATH.glob('*.RAF'))
+
+                # Find orphaned RAWs (those without a corresponding JPG in final)
+                orphaned_raws = [raw_file for raw_file in raw_files 
+                                if raw_file.stem not in final_jpg_bases]
+
+                # Count orphaned RAWs
+                stats['orphaned_raws'] = len(orphaned_raws)
+
+                # If not dry run, delete the orphaned RAWs
+                if not dry_run and orphaned_raws:
+                    for raw_file in orphaned_raws:
+                        try:
+                            raw_file.unlink()
+                            stats['deleted_raws'] += 1
+                        except Exception:
+                            stats['errors'] += 1
 
         return stats
 
@@ -179,14 +221,40 @@ class PhotoWorkflow:
         Returns:
             Dict[str, int]: Statistics about the cleanup operation
         """
-        # This is just a skeleton implementation
         stats = {
             'orphaned': 0,
             'deleted': 0,
             'errors': 0
         }
 
-        # Implementation would go here
+        # Check if RAWs and Final folders exist
+        if not RAWS_PATH.exists() or not FINAL_PATH.exists():
+            return stats
+
+        # Get all JPGs in the final folder
+        final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+
+        # Extract base filenames (without extension) from final JPGs
+        final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+
+        # Get all RAFs in the RAWs folder
+        raw_files = list(RAWS_PATH.glob('*.RAF'))
+
+        # Find orphaned RAWs (those without a corresponding JPG in final)
+        orphaned_raws = [raw_file for raw_file in raw_files 
+                         if raw_file.stem not in final_jpg_bases]
+
+        # Count orphaned RAWs
+        stats['orphaned'] = len(orphaned_raws)
+
+        # If not dry run, delete the orphaned RAWs
+        if not dry_run and orphaned_raws:
+            for raw_file in orphaned_raws:
+                try:
+                    raw_file.unlink()
+                    stats['deleted'] += 1
+                except Exception:
+                    stats['errors'] += 1
 
         return stats
 

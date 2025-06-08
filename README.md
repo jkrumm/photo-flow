@@ -75,15 +75,7 @@ photoflow import --dry-run
 photoflow finalize
 ```
 
-This moves approved photos from staging to the final folder.
-
-### Clean Up Unused RAWs
-
-```bash
-photoflow cleanup
-```
-
-This removes RAW files that don't have corresponding JPGs in the final folder.
+This moves approved photos from staging to the final folder, copies them back to the camera for viewing, and removes RAW files that don't have corresponding JPGs in the final folder.
 
 ## File Structure
 

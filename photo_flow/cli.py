@@ -63,36 +63,19 @@ def import_cmd(dry_run):
 @photoflow.command()
 @click.option('--dry-run', is_flag=True, help='Simulate finalization without moving files')
 def finalize(dry_run):
-    """Finalize the staging process by moving approved photos to the final folder."""
+    """Finalize the staging process by moving approved photos to the final folder, copying them back to camera, and cleaning up orphaned RAW files."""
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating finalization (no files will be moved)")
+        click.echo("DRY RUN: Simulating finalization (no files will be moved, copied, or deleted)")
 
     stats = workflow.finalize_staging(dry_run=dry_run)
 
     click.echo("\nFinalization Results:")
     click.echo(f"  Files moved to Final folder: {stats['moved']}")
-
-    if stats['errors'] > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
-
-
-@photoflow.command()
-@click.option('--dry-run', is_flag=True, help='Simulate cleanup without deleting files')
-@click.confirmation_option(prompt='Are you sure you want to delete orphaned RAW files?')
-def cleanup(dry_run):
-    """Clean up unused RAW files that don't have corresponding JPGs in the final folder."""
-    workflow = PhotoWorkflow()
-
-    if dry_run:
-        click.echo("DRY RUN: Simulating cleanup (no files will be deleted)")
-
-    stats = workflow.cleanup_unused_raws(dry_run=dry_run)
-
-    click.echo("\nCleanup Results:")
-    click.echo(f"  Orphaned RAW files found: {stats['orphaned']}")
-    click.echo(f"  RAW files deleted: {stats['deleted']}")
+    click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
+    click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")
+    click.echo(f"  Orphaned RAW files deleted: {stats['deleted_raws']}")
 
     if stats['errors'] > 0:
         click.echo(f"  Errors encountered: {stats['errors']}")
