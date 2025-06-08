@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.junie/guidelines.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.cursor/rules/project-rules.mdc" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.eslintrc.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.nvmrc" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.photo-flow.local.example.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.photo-flowrc.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/__tests__/cli-integration.test.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/photo-flow" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/commands.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/plugins.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/cli.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/commands/config.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/commands/connect.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/commands/generate.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/commands/photo-flow.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/extensions/cli-extension.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/base-command.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/configLoader.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/database.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/services/photoRepository.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/templates/model.ts.ejs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/types.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/types/config.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/types/state.ts" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tsconfig.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/yarn.lock" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 0
+}]]></component>
+  <component name="ProjectId" id="2yF8rqJUW3vKdjGhg1uvnqOUKIf" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "master",
+    "junie.onboarding.icon.badge.shown": "true",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
+        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="" />
+      <created>1749419162718</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1749419162718</updated>
+      <workItem from="1749419163732" duration="91000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>
