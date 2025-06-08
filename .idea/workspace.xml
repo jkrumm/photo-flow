@@ -4,8 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="refactor: rollback to use Python">
+    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: initial setup Python CLI">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/workflow.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,7 +56,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1749419162718</updated>
-      <workItem from="1749419163732" duration="401000" />
+      <workItem from="1749419163732" duration="1777000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />
@@ -63,7 +66,15 @@
       <option name="project" value="LOCAL" />
       <updated>1749419283209</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="feat: initial setup Python CLI">
+      <option name="closed" value="true" />
+      <created>1749419840279</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1749419840279</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -71,6 +82,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="refactor: rollback to use Python" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: rollback to use Python" />
+    <MESSAGE value="feat: initial setup Python CLI" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: initial setup Python CLI" />
   </component>
 </project>

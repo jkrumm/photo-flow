@@ -55,7 +55,7 @@ This command shows:
 ### Import Files
 
 ```bash
-photoflow import-files
+photoflow import
 ```
 
 This imports:
@@ -66,7 +66,7 @@ This imports:
 To preview without copying:
 
 ```bash
-photoflow import-files --dry-run
+photoflow import --dry-run
 ```
 
 ### Finalize Staging
