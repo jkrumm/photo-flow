@@ -49,9 +49,18 @@ def import_cmd(dry_run):
     if dry_run:
         click.echo("DRY RUN: Simulating import (no files will be copied)")
 
-    stats = workflow.import_from_camera(dry_run=dry_run)
+    # Define progress callback function
+    def progress_callback(message):
+        # Clear the current line and print the progress message
+        click.echo(f"\r\033[K{message}", nl=False)
 
-    click.echo("\nImport Results:")
+    # Call import_from_camera with progress callback
+    stats = workflow.import_from_camera(dry_run=dry_run, progress_callback=progress_callback)
+
+    # Print a newline to ensure results start on a new line
+    click.echo("\n")
+
+    click.echo("Import Results:")
     click.echo(f"  Videos copied to SSD: {stats['videos']}")
     click.echo(f"  Photos copied to Staging: {stats['photos']}")
     click.echo(f"  RAW files backed up: {stats['raws']}")
@@ -69,9 +78,18 @@ def finalize(dry_run):
     if dry_run:
         click.echo("DRY RUN: Simulating finalization (no files will be moved, copied, or deleted)")
 
-    stats = workflow.finalize_staging(dry_run=dry_run)
+    # Define progress callback function
+    def progress_callback(message):
+        # Clear the current line and print the progress message
+        click.echo(f"\r\033[K{message}", nl=False)
 
-    click.echo("\nFinalization Results:")
+    # Call finalize_staging with progress callback
+    stats = workflow.finalize_staging(dry_run=dry_run, progress_callback=progress_callback)
+
+    # Print a newline to ensure results start on a new line
+    click.echo("\n")
+
+    click.echo("Finalization Results:")
     click.echo(f"  Files moved to Final folder: {stats['moved']}")
     click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
     click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")

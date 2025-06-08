@@ -9,7 +9,7 @@ A CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow f
 - Manage workflow with staging and final folders
 - Backup RAW files
 - Copy videos to external SSD
-- Clean up unused RAW files
+- Automatically clean up unused RAW files during finalization
 
 ## Installation
 

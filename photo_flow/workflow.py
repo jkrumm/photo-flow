@@ -38,12 +38,13 @@ class PhotoWorkflow:
         self.file_manager = FileManager()
         self.image_processor = ImageProcessor()
 
-    def import_from_camera(self, dry_run: bool = False) -> Dict[str, int]:
+    def import_from_camera(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
         """
         Import files from the camera to the appropriate locations.
 
         Args:
             dry_run (bool): If True, only simulate the import without copying files
+            progress_callback (callable): Optional callback function for progress updates
 
         Returns:
             Dict[str, int]: Statistics about the import operation
@@ -56,6 +57,8 @@ class PhotoWorkflow:
         }
 
         # Scan camera for files
+        if progress_callback:
+            progress_callback("Scanning camera for files...")
         files = self.file_manager.scan_camera_files()
 
         # Count files that would be imported
@@ -68,14 +71,25 @@ class PhotoWorkflow:
         stats['photos'] = jpg_count
         stats['raws'] = raf_count
 
+        if progress_callback:
+            progress_callback(f"Found {mov_count} videos, {jpg_count} photos, and {raf_count} RAW files")
+
         # If not dry run, actually import the files
         if not dry_run:
             # Reset counters for actual import
             stats['videos'] = 0
             stats['photos'] = 0
             stats['raws'] = 0
+
             # Process MOV files (copy to SSD)
-            for mov_file in files.get('.MOV', []):
+            mov_files = files.get('.MOV', [])
+            if mov_files and progress_callback:
+                progress_callback(f"Copying {len(mov_files)} videos to SSD...")
+
+            for i, mov_file in enumerate(mov_files):
+                if progress_callback and i % 5 == 0:  # Update every 5 files to avoid too many updates
+                    progress_callback(f"Copying video {i+1}/{len(mov_files)}: {mov_file.name}")
+
                 dst_path = SSD_PATH / mov_file.name
                 if self.file_manager.safe_copy(mov_file, dst_path):
                     # Only increment counter if copy was successful
@@ -89,7 +103,14 @@ class PhotoWorkflow:
                     stats['errors'] += 1
 
             # Process JPG files (copy to Staging)
-            for jpg_file in files.get('.JPG', []):
+            jpg_files = files.get('.JPG', [])
+            if jpg_files and progress_callback:
+                progress_callback(f"Copying {len(jpg_files)} photos to Staging...")
+
+            for i, jpg_file in enumerate(jpg_files):
+                if progress_callback and i % 10 == 0:  # Update every 10 files
+                    progress_callback(f"Copying photo {i+1}/{len(jpg_files)}: {jpg_file.name}")
+
                 dst_path = STAGING_PATH / jpg_file.name
 
                 # First copy the file
@@ -105,7 +126,14 @@ class PhotoWorkflow:
                     stats['errors'] += 1
 
             # Process RAF files (copy to RAWs)
-            for raf_file in files.get('.RAF', []):
+            raf_files = files.get('.RAF', [])
+            if raf_files and progress_callback:
+                progress_callback(f"Copying {len(raf_files)} RAW files to backup...")
+
+            for i, raf_file in enumerate(raf_files):
+                if progress_callback and i % 10 == 0:  # Update every 10 files
+                    progress_callback(f"Copying RAW file {i+1}/{len(raf_files)}: {raf_file.name}")
+
                 dst_path = RAWS_PATH / raf_file.name
                 if self.file_manager.safe_copy(raf_file, dst_path):
                     stats['raws'] += 1
@@ -117,15 +145,19 @@ class PhotoWorkflow:
                 else:
                     stats['errors'] += 1
 
+            if progress_callback:
+                progress_callback("Import completed successfully!")
+
         return stats
 
-    def finalize_staging(self, dry_run: bool = False) -> Dict[str, int]:
+    def finalize_staging(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
         """
         Finalize the staging process by moving approved photos to the final folder,
         copying them back to the camera for viewing, and cleaning up orphaned RAW files.
 
         Args:
             dry_run (bool): If True, only simulate the finalization without moving files
+            progress_callback (callable): Optional callback function for progress updates
 
         Returns:
             Dict[str, int]: Statistics about the finalization operation
@@ -139,7 +171,12 @@ class PhotoWorkflow:
         }
 
         # Scan staging folder for JPG files
+        if progress_callback:
+            progress_callback("Scanning staging folder for photos...")
+
         if not STAGING_PATH.exists():
+            if progress_callback:
+                progress_callback("Staging folder not found. Nothing to finalize.")
             return stats
 
         staging_files = list(STAGING_PATH.glob('*.JPG'))
@@ -147,6 +184,9 @@ class PhotoWorkflow:
         # Count files that would be moved
         stats['moved'] = len(staging_files)
         stats['copied_to_camera'] = len(staging_files)
+
+        if progress_callback:
+            progress_callback(f"Found {len(staging_files)} photos in staging")
 
         # If not dry run, actually move the files
         if not dry_run:
@@ -158,7 +198,13 @@ class PhotoWorkflow:
             FINAL_PATH.mkdir(parents=True, exist_ok=True)
 
             # Process each file in staging
-            for jpg_file in staging_files:
+            if staging_files and progress_callback:
+                progress_callback(f"Moving {len(staging_files)} photos to final folder...")
+
+            for i, jpg_file in enumerate(staging_files):
+                if progress_callback and i % 5 == 0:  # Update every 5 files
+                    progress_callback(f"Moving photo {i+1}/{len(staging_files)}: {jpg_file.name}")
+
                 dst_path = FINAL_PATH / jpg_file.name
 
                 # First copy the file to final folder
@@ -175,14 +221,26 @@ class PhotoWorkflow:
 
             # After moving all files to final, copy them back to camera
             if CAMERA_PATH.exists():
-                for jpg_file in FINAL_PATH.glob('*.JPG'):
+                final_files = list(FINAL_PATH.glob('*.JPG'))
+                if final_files and progress_callback:
+                    progress_callback(f"Copying {len(final_files)} photos back to camera...")
+
+                for i, jpg_file in enumerate(final_files):
+                    if progress_callback and i % 5 == 0:  # Update every 5 files
+                        progress_callback(f"Copying photo {i+1}/{len(final_files)} to camera: {jpg_file.name}")
+
                     camera_dst_path = CAMERA_PATH / jpg_file.name
                     if self.file_manager.safe_copy(jpg_file, camera_dst_path):
                         stats['copied_to_camera'] += 1
                     else:
                         stats['errors'] += 1
+            elif progress_callback:
+                progress_callback("Camera not connected. Skipping copy back to camera.")
 
             # Clean up orphaned RAW files
+            if progress_callback:
+                progress_callback("Checking for orphaned RAW files...")
+
             if RAWS_PATH.exists() and FINAL_PATH.exists():
                 # Get all JPGs in the final folder
                 final_jpgs = list(FINAL_PATH.glob('*.JPG'))
@@ -200,14 +258,26 @@ class PhotoWorkflow:
                 # Count orphaned RAWs
                 stats['orphaned_raws'] = len(orphaned_raws)
 
+                if progress_callback:
+                    progress_callback(f"Found {len(orphaned_raws)} orphaned RAW files")
+
                 # If not dry run, delete the orphaned RAWs
                 if not dry_run and orphaned_raws:
-                    for raw_file in orphaned_raws:
+                    if progress_callback:
+                        progress_callback(f"Deleting {len(orphaned_raws)} orphaned RAW files...")
+
+                    for i, raw_file in enumerate(orphaned_raws):
+                        if progress_callback and i % 10 == 0:  # Update every 10 files
+                            progress_callback(f"Deleting RAW file {i+1}/{len(orphaned_raws)}: {raw_file.name}")
+
                         try:
                             raw_file.unlink()
                             stats['deleted_raws'] += 1
                         except Exception:
                             stats['errors'] += 1
+
+            if progress_callback:
+                progress_callback("Finalization completed successfully!")
 
         return stats
 
