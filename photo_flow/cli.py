@@ -64,6 +64,7 @@ def import_cmd(dry_run):
     click.echo(f"  Videos copied to SSD: {stats['videos']}")
     click.echo(f"  Photos copied to Staging: {stats['photos']}")
     click.echo(f"  RAW files backed up: {stats['raws']}")
+    click.echo(f"  Files skipped (already exist): {stats['skipped']}")
 
     if stats['errors'] > 0:
         click.echo(f"  Errors encountered: {stats['errors']}")
@@ -94,6 +95,7 @@ def finalize(dry_run):
     click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
     click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")
     click.echo(f"  Orphaned RAW files deleted: {stats['deleted_raws']}")
+    click.echo(f"  Files skipped (already exist): {stats['skipped']}")
 
     if stats['errors'] > 0:
         click.echo(f"  Errors encountered: {stats['errors']}")

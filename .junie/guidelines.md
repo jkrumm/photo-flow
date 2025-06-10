@@ -7,7 +7,7 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with staging workf
 
 ### File Paths (Hardcoded)
 ```python
-CAMERA_PATH = "/Volumes/Fuji X-T4/DCIM/100_FUJI"
+CAMERA_PATH = "/Volumes/Fuji X-T4/DCIM/102_FUJI"
 STAGING_PATH = "/Users/johannes.krumm/Pictures/Staging"
 RAWS_PATH = "/Users/johannes.krumm/Pictures/RAWs"
 FINAL_PATH = "/Users/johannes.krumm/Pictures/Final"
@@ -67,7 +67,7 @@ def import_files():
 ## File Structure Examples
 ```
 Camera:
-/Volumes/Fuji X-T4/DCIM/100_FUJI/
+/Volumes/Fuji X-T4/DCIM/102_FUJI/
 ├── DSCF0430.JPG
 ├── DSCF0430.RAF
 └── DSCF1451.MOV
@@ -87,7 +87,7 @@ External SSD:
 
 ### Import Phase
 ```
-1. Scan /Volumes/Fuji X-T4/DCIM/100_FUJI for files
+1. Scan /Volumes/Fuji X-T4/DCIM/102_FUJI for files
 2. Categorize by extension:
    - .MOV → Copy to SSD
    - .JPG → Copy to Staging (apply clarity effect)
@@ -150,7 +150,7 @@ photoflow cleanup --dry-run         # Preview RAW cleanup
 ## Configuration (Hardcoded)
 ```python
 # config.py
-CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/100_FUJI")
+CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/102_FUJI")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
 RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")

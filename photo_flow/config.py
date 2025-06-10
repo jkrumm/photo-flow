@@ -7,7 +7,7 @@ This module contains hardcoded paths and settings used throughout the applicatio
 from pathlib import Path
 
 # File paths
-CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/100_FUJI")
+CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/102_FUJI")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
 RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")

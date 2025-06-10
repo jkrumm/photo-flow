@@ -81,7 +81,7 @@ This moves approved photos from staging to the final folder, copies them back to
 
 ```
 Camera:
-/Volumes/Fuji X-T4/DCIM/100_FUJI/
+/Volumes/Fuji X-T4/DCIM/102_FUJI/
 ├── DSCF0430.JPG
 ├── DSCF0430.RAF
 └── DSCF1451.MOV
@@ -102,7 +102,7 @@ External SSD:
 The application uses hardcoded paths in `photo_flow/config.py`. Modify these to match your system:
 
 ```python
-CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/100_FUJI")
+CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM/102_FUJI")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
 RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
