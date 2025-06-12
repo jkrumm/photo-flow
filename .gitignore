@@ -25,3 +25,41 @@ Thumbs.db
 
 # Local development
 .env
+
+# Photo Gallery (Astro) specific
+photo_gallery/node_modules/
+photo_gallery/dist/
+photo_gallery/*.tsbuildinfo
+photo_gallery/.vercel
+photo_gallery/.netlify
+photo_gallery/_site/
+photo_gallery/.astro/
+photo_gallery/scripts/smoke/*-main/
+photo_gallery/scripts/memory/project/src/pages/
+photo_gallery/benchmark/projects/
+photo_gallery/benchmark/results/
+photo_gallery/test-results/
+photo_gallery/*.log
+photo_gallery/package-lock.json
+photo_gallery/.turbo/
+photo_gallery/.eslintcache
+photo_gallery/.pnpm-store
+photo_gallery/public/images
+photo_gallery/public/metadata.json
+
+# do not commit .env files or any files that end with `.env`
+*.env
+
+# Astro prebuilt files
+photo_gallery/src/**/*.prebuilt.ts
+photo_gallery/src/**/*.prebuilt-dev.ts
+photo_gallery/test/units/_temp-fixtures/*
+!photo_gallery/test/units/_temp-fixtures/package.json
+photo_gallery/integrations/**/.netlify/
+
+# ignore content collection generated files
+photo_gallery/**/.astro/
+photo_gallery/**/env.d.ts
+
+# Astro workspace settings
+*.code-workspace

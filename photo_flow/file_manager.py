@@ -12,6 +12,51 @@ from typing import Dict, List
 from photo_flow.config import CAMERA_PATH, EXTENSIONS
 
 
+def is_valid_image_file(file_path: Path) -> bool:
+    """
+    Check if a file is a valid image file (not a system/metadata file).
+
+    Args:
+        file_path (Path): Path to the file
+
+    Returns:
+        bool: True if the file is a valid image file, False otherwise
+    """
+    filename = file_path.name
+    return not (
+        filename.startswith('._') or          # macOS resource forks
+        filename.startswith('.DS_Store') or   # macOS metadata
+        filename.startswith('Thumbs.db')      # Windows thumbnails
+    )
+
+
+def scan_for_images(directory: Path, extension: str = '.JPG') -> List[Path]:
+    """
+    Scan a directory for image files with case-insensitive extension matching.
+
+    Args:
+        directory (Path): Directory to scan
+        extension (str): File extension to look for (default: '.JPG')
+
+    Returns:
+        List[Path]: List of valid image files
+    """
+    # Remove the dot if present to normalize the extension
+    if extension.startswith('.'):
+        extension = extension[1:]
+
+    # Get both uppercase and lowercase versions
+    upper_ext = f'*.{extension.upper()}'
+    lower_ext = f'*.{extension.lower()}'
+
+    # Scan for both uppercase and lowercase extensions
+    upper_files = [f for f in directory.glob(upper_ext) if is_valid_image_file(f)]
+    lower_files = [f for f in directory.glob(lower_ext) if is_valid_image_file(f)]
+
+    # Combine the results
+    return upper_files + lower_files
+
+
 class FileManager:
     """
     Handles file operations for the Photo-Flow application.
@@ -34,6 +79,10 @@ class FileManager:
             return result
 
         for file_path in CAMERA_PATH.glob('*'):
+            # Skip macOS resource fork files and other system files
+            if not is_valid_image_file(file_path):
+                continue
+
             ext = file_path.suffix.upper()
             if ext in EXTENSIONS:
                 result[ext].append(file_path)

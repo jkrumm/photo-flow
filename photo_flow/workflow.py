@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH
-from photo_flow.file_manager import FileManager
+from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH
+from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
+from photo_flow.metadata_extractor import MetadataExtractor
 
 
 @dataclass
@@ -55,7 +56,7 @@ class PhotoWorkflow:
         Returns:
             Dict with 'processed', 'skipped', 'errors' counts
         """
-        stats = {'processed': 0, 'skipped': 0, 'errors': 0}
+        stats = {'processed': 0, 'skipped': 0, 'errors': 0, 'errors': 0}
 
         for i, file_path in enumerate(files):
             if progress_callback and i % 10 == 0:
@@ -108,7 +109,7 @@ class PhotoWorkflow:
         if FINAL_PATH.exists():
             if progress_callback:
                 progress_callback("Checking for files already in Final folder...")
-            final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+            final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
         # Filter out finalized files
@@ -201,7 +202,7 @@ class PhotoWorkflow:
                 progress_callback("Staging folder not found. Nothing to finalize.")
             return stats
 
-        staging_files = list(STAGING_PATH.glob('*.JPG'))
+        staging_files = scan_for_images(STAGING_PATH, '.JPG')
 
         if progress_callback:
             progress_callback(f"Found {len(staging_files)} photos in staging")
@@ -216,7 +217,7 @@ class PhotoWorkflow:
         # Add camera copy operations if camera is connected
         final_files = []
         if CAMERA_PATH.exists():
-            final_files = list(FINAL_PATH.glob('*.JPG'))
+            final_files = scan_for_images(FINAL_PATH, '.JPG')
             total_operations += len(final_files)
 
         # Initialize progress counter
@@ -253,7 +254,7 @@ class PhotoWorkflow:
         # After moving all files to final, copy them back to camera
         if CAMERA_PATH.exists():
             # Get final files AFTER moving staging files
-            final_files = list(FINAL_PATH.glob('*.JPG'))  # Move this line here
+            final_files = scan_for_images(FINAL_PATH, '.JPG')  # Move this line here
             if final_files and progress_callback:
                 progress_callback(f"Copying {len(final_files)} photos back to camera...")
 
@@ -272,13 +273,13 @@ class PhotoWorkflow:
 
         if RAWS_PATH.exists() and FINAL_PATH.exists():
             # Get all JPGs in the final folder
-            final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+            final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
 
             # Extract base filenames (without extension) from final JPGs
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
             # Get all RAFs in the RAWs folder
-            raw_files = list(RAWS_PATH.glob('*.RAF'))
+            raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
 
             # Find orphaned RAWs (those without a corresponding JPG in final)
             orphaned_raws = [raw_file for raw_file in raw_files
@@ -336,13 +337,13 @@ class PhotoWorkflow:
             progress_callback("Scanning for orphaned RAW files...")
 
         # Get all JPGs in the final folder
-        final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+        final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
 
         # Extract base filenames (without extension) from final JPGs
         final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
         # Get all RAFs in the RAWs folder
-        raw_files = list(RAWS_PATH.glob('*.RAF'))
+        raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
 
         # Find orphaned RAWs (those without a corresponding JPG in final)
         orphaned_raws = [raw_file for raw_file in raw_files
@@ -388,7 +389,7 @@ class PhotoWorkflow:
 
         # Count files in staging
         if STAGING_PATH.exists():
-            report.staging_files = len(list(STAGING_PATH.glob('*.JPG')))
+            report.staging_files = len(scan_for_images(STAGING_PATH, '.JPG'))
 
         # Count pending files on camera (if connected)
         if report.camera_connected:
@@ -402,7 +403,7 @@ class PhotoWorkflow:
             # Get a list of JPGs in the Final folder (if it exists)
             final_jpg_bases = set()
             if FINAL_PATH.exists():
-                final_jpgs = list(FINAL_PATH.glob('*.JPG'))
+                final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
                 final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
             # Filter out JPGs that are already in the Final folder
@@ -412,3 +413,168 @@ class PhotoWorkflow:
             report.pending_raws = len(files.get('.RAF', []))
 
         return report
+
+    def sync_gallery(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+        """
+        Sync high-rated images to the gallery and generate metadata JSON.
+
+        This method:
+        1. Scans all JPG files in FINAL_PATH
+        2. Extracts metadata for each image
+        3. Filters images with rating 4+ for gallery sync
+        4. Copies high-rated images to GALLERY_PATH/images/
+        5. Removes images from gallery that no longer qualify
+        6. Generates comprehensive metadata JSON file
+        7. Saves JSON to GALLERY_PATH/metadata.json
+
+        Args:
+            dry_run (bool): If True, only simulate the sync without copying files
+            progress_callback (callable): Optional callback function for progress updates
+
+        Returns:
+            Dict[str, int]: Statistics about the sync operation
+        """
+        stats = {
+            'scanned': 0,
+            'synced': 0,
+            'removed': 0,
+            'skipped': 0,
+            'errors': 0,
+            'json_updated': False,
+            'total_in_gallery': 0
+        }
+
+        # Check if FINAL_PATH exists
+        if not FINAL_PATH.exists():
+            if progress_callback:
+                progress_callback("Final folder does not exist. Nothing to sync.")
+            return stats
+
+        # Create gallery images directory if it doesn't exist
+        gallery_images_path = GALLERY_PATH / "images"
+        if not dry_run:
+            gallery_images_path.mkdir(parents=True, exist_ok=True)
+
+        # Scan for JPG files in FINAL_PATH
+        if progress_callback:
+            progress_callback("Scanning for JPG files in Final folder...")
+
+        # Get JPG files with case-insensitive extension matching
+        final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
+        stats['scanned'] = len(final_jpgs)
+
+        if progress_callback:
+            progress_callback(f"Found {len(final_jpgs)} JPG files in Final folder")
+
+        # Extract metadata and filter high-rated images
+        high_rated_images = []
+        all_metadata = []
+
+        if progress_callback:
+            progress_callback("Extracting metadata and filtering high-rated images...")
+
+        # Create a wrapper for the progress callback to show metadata extraction progress
+        def progress_wrapper(message):
+            if progress_callback:
+                progress_callback(message)
+
+        # Process each image
+        for i, jpg_path in enumerate(final_jpgs):
+            if progress_callback and i % 5 == 0:
+                progress_callback(f"Extracting metadata {i + 1}/{len(final_jpgs)}: {jpg_path.name}")
+
+            # Extract metadata
+            metadata = MetadataExtractor.extract_metadata(jpg_path)
+
+            # Add metadata to the list
+            all_metadata.append(metadata)
+
+            # Check if image has rating 4+
+            rating = metadata.get('rating', 0)
+
+            if rating >= 4:
+                high_rated_images.append((jpg_path, metadata))
+
+        if progress_callback:
+            progress_callback(f"Found {len(high_rated_images)} images with rating 4+")
+
+        # Get existing gallery images
+        existing_gallery_images = scan_for_images(gallery_images_path, '.JPG') if gallery_images_path.exists() else []
+        existing_gallery_image_names = {img.name for img in existing_gallery_images}
+
+        print(f"Existing gallery images: {len(existing_gallery_images)}")
+        print(f"Existing gallery image names: {existing_gallery_image_names}")
+
+        # Determine which images to copy to gallery
+        high_rated_image_names = {img[0].name for img in high_rated_images}
+
+        print(f"High-rated images: {len(high_rated_images)}")
+        print(f"High-rated image names: {high_rated_image_names}")
+
+        # Images to remove (in gallery but no longer high-rated)
+        images_to_remove = [img for img in existing_gallery_images if img.name not in high_rated_image_names]
+
+        # Images to copy (high-rated but not in gallery)
+        images_to_copy = [img[0] for img in high_rated_images if img[0].name not in existing_gallery_image_names]
+
+        print(f"Images to remove: {len(images_to_remove)}")
+        print(f"Images to copy: {len(images_to_copy)}")
+
+        if progress_callback:
+            progress_callback(f"Images to copy: {len(images_to_copy)}, Images to remove: {len(images_to_remove)}")
+
+        # Remove images that no longer qualify
+        if not dry_run and images_to_remove:
+            if progress_callback:
+                progress_callback(f"Removing {len(images_to_remove)} images from gallery...")
+
+            for img_path in images_to_remove:
+                try:
+                    img_path.unlink()
+                    stats['removed'] += 1
+                except Exception as e:
+                    print(f"Error removing {img_path}: {e}")
+                    stats['errors'] += 1
+
+        # Copy high-rated images to gallery
+        if images_to_copy:
+            if progress_callback:
+                progress_callback(f"Copying {len(images_to_copy)} images to gallery...")
+
+            # Use the generic process_files method for copying
+            copy_stats = self._process_files(
+                images_to_copy, 
+                gallery_images_path, 
+                "gallery image",
+                progress_callback, 
+                dry_run,
+                delete_original=False  # Don't delete original files
+            )
+
+            stats['synced'] = copy_stats['processed']
+            stats['skipped'] = copy_stats['skipped']
+            stats['errors'] += copy_stats['errors']
+
+        # Calculate total images in gallery after sync
+        if not dry_run:
+            stats['total_in_gallery'] = len(scan_for_images(gallery_images_path, '.JPG'))
+        else:
+            # In dry run mode, estimate the total
+            stats['total_in_gallery'] = len(existing_gallery_images) - len(images_to_remove) + len(images_to_copy)
+
+        # Generate metadata JSON for all high-rated images
+        if progress_callback:
+            progress_callback("Generating metadata JSON...")
+
+        # Filter metadata for high-rated images only
+        high_rated_metadata = [metadata for metadata in all_metadata if metadata.get('rating', 0) >= 4]
+
+        # Generate and save metadata JSON
+        if not dry_run:
+            json_path = GALLERY_PATH / "metadata.json"
+            stats['json_updated'] = MetadataExtractor.generate_metadata_json(high_rated_metadata, json_path)
+
+        if progress_callback:
+            progress_callback("Gallery sync completed successfully!")
+
+        return stats

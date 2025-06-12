@@ -101,5 +101,35 @@ def finalize(dry_run):
         click.echo(f"  Errors encountered: {stats['errors']}")
 
 
+@photoflow.command()
+@click.option('--dry-run', is_flag=True, help='Simulate gallery sync without copying files')
+def sync_gallery(dry_run):
+    """Sync high-rated photos to gallery and generate metadata JSON."""
+    workflow = PhotoWorkflow()
+
+    if dry_run:
+        click.echo("DRY RUN: Simulating gallery sync (no files will be copied or removed)")
+
+    # Define progress callback function
+    def progress_callback(message):
+        # Clear the current line and print the progress message
+        click.echo(f"\r\033[K{message}", nl=False)
+
+    # Call sync_gallery with progress callback
+    stats = workflow.sync_gallery(dry_run=dry_run, progress_callback=progress_callback)
+
+    # Print a newline to ensure results start on a new line
+    click.echo("\n")
+
+    click.echo("Gallery Sync Results:")
+    click.echo(f"  Images synced to gallery: {stats['synced']}")
+    click.echo(f"  Images removed from gallery: {stats['removed']}")
+    click.echo(f"  Metadata JSON updated: {'Yes' if stats['json_updated'] else 'No'}")
+    click.echo(f"  Total images in gallery: {stats['total_in_gallery']}")
+
+    if stats['errors'] > 0:
+        click.echo(f"  Errors encountered: {stats['errors']}")
+
+
 if __name__ == '__main__':
     photoflow()

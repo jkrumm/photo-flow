@@ -1,3 +1,4 @@
-Click>=8.0
-Pillow>=9.0
+Click>=8.1.8
+Pillow>=11.2.1
+defusedxml>=0.7.1
 piexif>=1.1.3
