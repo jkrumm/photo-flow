@@ -85,7 +85,7 @@ export default function ImageModal({ image, onClose }: ImageModalProps) {
           <div className="p-6 relative">
             {/* Display map as background if location data is available */}
             {image.metadata.latitude && image.metadata.longitude && (
-              <div className="absolute inset-0 z-0">
+              <div className="absolute inset-0 z-0 overflow-hidden" style={{ maxHeight: "120px" }}>
                 <LocationMap 
                   latitude={image.metadata.latitude} 
                   longitude={image.metadata.longitude} 
