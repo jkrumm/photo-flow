@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import type { ImageData } from '../utils/images';
-import ImageModal from './ImageModal';
+
+// Only import ImageModal in development mode
+const ImageModal = import.meta.env.DEV 
+  ? (await import('./ImageModal')).default 
+  : null;
 
 interface GalleryProps {
   images: ImageData[];
@@ -9,10 +13,15 @@ interface GalleryProps {
 export default function Gallery({ images }: GalleryProps) {
   const [selectedImage, setSelectedImage] = useState<ImageData | null>(null);
 
+  // Only enable lightbox in development mode
+  const isDev = import.meta.env.DEV;
+
   const handleImageClick = (image: ImageData) => {
-    setSelectedImage(image);
-    // Prevent scrolling when modal is open
-    document.body.style.overflow = 'hidden';
+    if (isDev) {
+      setSelectedImage(image);
+      // Prevent scrolling when modal is open
+      document.body.style.overflow = 'hidden';
+    }
   };
 
   const handleCloseModal = () => {
@@ -42,11 +51,13 @@ export default function Gallery({ images }: GalleryProps) {
         ))}
       </div>
 
-      {/* Image Modal */}
-      <ImageModal 
-        image={selectedImage} 
-        onClose={handleCloseModal} 
-      />
+      {/* Image Modal - only render in development mode */}
+      {isDev && ImageModal && selectedImage && (
+        <ImageModal 
+          image={selectedImage} 
+          onClose={handleCloseModal} 
+        />
+      )}
     </>
   );
 }
