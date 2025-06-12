@@ -3,8 +3,30 @@ import type { ImageMetadata } from 'astro';
 import fs from 'fs/promises';
 import path from 'path';
 
+// Define interface for image metadata
+export interface ImageData {
+  src: ImageMetadata;
+  alt: string;
+  metadata: {
+    filename: string;
+    dimensions: string;
+    camera_make: string;
+    camera_model: string;
+    iso: number;
+    aperture: string;
+    shutter_speed: string;
+    focal_length: string;
+    date_taken: string;
+    rating?: number;
+    title?: string;
+    description?: string;
+    latitude?: number;
+    longitude?: number;
+  };
+}
+
 // Function to get all images from the metadata.json file
-export async function getGalleryImages(): Promise<{ src: ImageMetadata; alt: string }[]> {
+export async function getGalleryImages(): Promise<ImageData[]> {
   try {
     // Path to the metadata.json file
     const metadataPath = path.resolve('public/metadata.json');
@@ -32,6 +54,22 @@ export async function getGalleryImages(): Promise<{ src: ImageMetadata; alt: str
       return {
         src: imageMetadata,
         alt: alt,
+        metadata: {
+          filename: imageData.filename,
+          dimensions: imageData.dimensions,
+          camera_make: imageData.camera_make,
+          camera_model: imageData.camera_model,
+          iso: imageData.iso,
+          aperture: imageData.aperture,
+          shutter_speed: imageData.shutter_speed,
+          focal_length: imageData.focal_length,
+          date_taken: imageData.date_taken,
+          rating: imageData.rating,
+          title: imageData.title,
+          description: imageData.description,
+          latitude: imageData.latitude,
+          longitude: imageData.longitude,
+        },
         dateTaken: imageData.date_taken, // Preserve date_taken for sorting
       };
     });

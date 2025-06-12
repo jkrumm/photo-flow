@@ -8,6 +8,8 @@ A responsive photo gallery built with Astro, React, and Tailwind CSS.
 - Optimized image loading with Astro's image capabilities
 - Clean presentation without borders, maximizing screen space
 - Support for high-quality JPG images from Fuji camera
+- Interactive full-page view with detailed image metadata
+- Smooth animations for enhanced user experience
 
 ## Getting Started
 
@@ -44,6 +46,22 @@ yarn dev
 3. The gallery will automatically display all images listed in the metadata file
 4. Images will be displayed sorted by date taken, with the most recent photos at the top
 5. For best results, include titles in the metadata or use descriptive filenames as they will be used as alt text
+
+## Using the Gallery
+
+### Viewing Images
+- Images are displayed in a scrollable list
+- Each image is sized to fit the screen while maintaining its aspect ratio
+- The gallery has a maximum width of 1680px
+
+### Interactive Features
+- Click on any image to open it in a full-page view
+- The full-page view displays the image along with detailed metadata
+- Metadata shown includes:
+  - Camera details (make, model, ISO, aperture, shutter speed, focal length)
+  - Image details (date taken, dimensions, rating, description if available)
+- Click anywhere outside the image or press ESC to close the full-page view
+- Smooth animations provide a polished user experience
 
 ## Building for Production
 
