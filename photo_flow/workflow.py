@@ -6,6 +6,7 @@ This module provides the main workflow logic for the application.
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 from typing import Dict, List
 
 from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH
@@ -576,5 +577,68 @@ class PhotoWorkflow:
 
         if progress_callback:
             progress_callback("Gallery sync completed successfully!")
+
+        # Build the gallery and sync to remote server
+        if not dry_run:
+            # Get the photo_gallery directory path
+            photo_gallery_path = GALLERY_PATH.parent
+
+            if progress_callback:
+                progress_callback("Building gallery with npm run build...")
+
+            try:
+                # Change to photo_gallery directory and run npm build
+                build_process = subprocess.run(
+                    ["npm", "run", "build"],
+                    cwd=photo_gallery_path,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+
+                if progress_callback:
+                    progress_callback("Gallery build completed successfully.")
+                    progress_callback("Syncing dist folder to remote server...")
+
+                # Sync the dist folder to the remote server
+                # Using rsync with --delete flag to clean the destination directory first
+                rsync_process = subprocess.run(
+                    [
+                        "rsync",
+                        "-avz",
+                        "--delete",
+                        f"{photo_gallery_path}/dist/",
+                        "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery"
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+
+                if progress_callback:
+                    progress_callback("Gallery successfully synced to remote server.")
+
+                # Add build and sync info to stats
+                stats['build_successful'] = True
+                stats['sync_successful'] = True
+
+            except subprocess.CalledProcessError as e:
+                print(f"Error during build or sync: {e}")
+                print(f"Command output: {e.stdout}")
+                print(f"Command error: {e.stderr}")
+                stats['errors'] += 1
+                stats['build_successful'] = False
+                stats['sync_successful'] = False
+
+                if progress_callback:
+                    progress_callback(f"Error during build or sync: {e}")
+        else:
+            # In dry run mode
+            if progress_callback:
+                progress_callback("DRY RUN: Would build gallery and sync to remote server")
+
+            # Add build and sync info to stats for dry run
+            stats['build_successful'] = False
+            stats['sync_successful'] = False
 
         return stats

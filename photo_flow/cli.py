@@ -127,6 +127,14 @@ def sync_gallery(dry_run):
     click.echo(f"  Metadata JSON updated: {'Yes' if stats['json_updated'] else 'No'}")
     click.echo(f"  Total images in gallery: {stats['total_in_gallery']}")
 
+    # Display build and sync status if available
+    if 'build_successful' in stats:
+        if not dry_run:
+            click.echo(f"  Gallery build: {'Successful' if stats['build_successful'] else 'Failed'}")
+            click.echo(f"  Remote sync: {'Successful' if stats['sync_successful'] else 'Failed'}")
+        else:
+            click.echo("  Gallery build and remote sync: Would be performed (dry run)")
+
     if stats['errors'] > 0:
         click.echo(f"  Errors encountered: {stats['errors']}")
 
