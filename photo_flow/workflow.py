@@ -423,10 +423,11 @@ class PhotoWorkflow:
         1. Scans all JPG files in FINAL_PATH
         2. Extracts metadata for each image
         3. Filters images with rating 4+ for gallery sync
-        4. Copies high-rated images to GALLERY_PATH/images/
-        5. Removes images from gallery that no longer qualify
+        4. Copies high-rated images to GALLERY_PATH/images/ (only if they've changed)
+        5. Removes images from gallery that no longer qualify (rating < 4)
         6. Generates comprehensive metadata JSON file
         7. Saves JSON to GALLERY_PATH/metadata.json
+        8. Builds gallery and syncs to remote server (preserving images)
 
         Args:
             dry_run (bool): If True, only simulate the sync without copying files
@@ -440,6 +441,7 @@ class PhotoWorkflow:
             'synced': 0,
             'removed': 0,
             'skipped': 0,
+            'unchanged': 0,
             'errors': 0,
             'json_updated': False,
             'total_in_gallery': 0
@@ -556,6 +558,39 @@ class PhotoWorkflow:
             stats['skipped'] = copy_stats['skipped']
             stats['errors'] += copy_stats['errors']
 
+        # Check existing high-rated images for changes
+        if progress_callback:
+            progress_callback("Checking existing high-rated images for changes...")
+
+        # Images to update (high-rated and already in gallery)
+        images_to_update = [(img[0], img[1]) for img in high_rated_images if img[0].name in existing_gallery_image_names]
+
+        # Count of unchanged images
+        unchanged_count = 0
+
+        # Update images that have changed
+        for src_path, metadata in images_to_update:
+            dst_path = gallery_images_path / src_path.name
+
+            # Skip if files are identical
+            if FileManager.is_duplicate(src_path, dst_path):
+                unchanged_count += 1
+                continue
+
+            # Copy the file if it has changed
+            if not dry_run:
+                try:
+                    FileManager.safe_copy(src_path, dst_path)
+                    stats['synced'] += 1
+                except Exception as e:
+                    print(f"Error updating {src_path.name}: {e}")
+                    stats['errors'] += 1
+            else:
+                # In dry run mode, just count it
+                stats['synced'] += 1
+
+        stats['unchanged'] = unchanged_count
+
         # Calculate total images in gallery after sync
         if not dry_run:
             stats['total_in_gallery'] = len(scan_for_images(gallery_images_path, '.JPG'))
@@ -601,7 +636,7 @@ class PhotoWorkflow:
                     progress_callback("Syncing dist folder to remote server...")
 
                 # Sync the dist folder to the remote server
-                # Using rsync with --delete flag to clean the destination directory first
+                # Using rsync with --delete flag to delete all content in the hosted photo_gallery
                 rsync_process = subprocess.run(
                     [
                         "rsync",

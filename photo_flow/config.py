@@ -12,7 +12,7 @@ STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
 RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
-GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/public")
+GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
 
 # Image processing settings
 CLARITY_ADJUSTMENT = -3

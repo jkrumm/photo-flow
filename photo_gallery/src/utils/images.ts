@@ -1,11 +1,8 @@
-import { getImage } from 'astro:assets';
-import type { ImageMetadata } from 'astro';
 import fs from 'fs/promises';
 import path from 'path';
 
-// Define interface for image metadata
 export interface ImageData {
-  src: ImageMetadata;
+  src: any; // Astro ImageMetadata object
   alt: string;
   metadata: {
     filename: string;
@@ -17,7 +14,7 @@ export interface ImageData {
     shutter_speed: string;
     focal_length: string;
     date_taken: string;
-    rating?: number;
+    rating: number;
     title?: string;
     description?: string;
     latitude?: number;
@@ -25,84 +22,91 @@ export interface ImageData {
   };
 }
 
-// Function to get all images from the metadata.json file
 export async function getGalleryImages(): Promise<ImageData[]> {
   try {
-    // Path to the metadata.json file
-    const metadataPath = path.resolve('public/metadata.json');
-
-    // Read and parse the metadata.json file
+    // Read metadata
+    const metadataPath = path.resolve('src/metadata.json');
     const metadataContent = await fs.readFile(metadataPath, 'utf-8');
     const metadata = JSON.parse(metadataContent);
 
-    // Create image metadata for each file in the metadata
-    const images = metadata.images.map((imageData: any) => {
-      // Extract dimensions
-      const [width, height] = imageData.dimensions.split('x').map(Number);
-
-      // Create a metadata object
-      const imageMetadata: ImageMetadata = {
-        src: `/images/${imageData.filename}`,
-        width: width,
-        height: height,
-        format: path.extname(imageData.filename).substring(1).toLowerCase() as any,
-      };
-
-      // Use filename as alt text, or title if available
-      const alt = imageData.title || path.basename(imageData.filename, path.extname(imageData.filename));
-
-      return {
-        src: imageMetadata,
-        alt: alt,
-        metadata: {
-          filename: imageData.filename,
-          dimensions: imageData.dimensions,
-          camera_make: imageData.camera_make,
-          camera_model: imageData.camera_model,
-          iso: imageData.iso,
-          aperture: imageData.aperture,
-          shutter_speed: imageData.shutter_speed,
-          focal_length: imageData.focal_length,
-          date_taken: imageData.date_taken,
-          rating: imageData.rating,
-          title: imageData.title,
-          description: imageData.description,
-          latitude: imageData.latitude,
-          longitude: imageData.longitude,
-        },
-        dateTaken: imageData.date_taken, // Preserve date_taken for sorting
-      };
+    // Simplified dynamic import with better error handling
+    const imageModules = import.meta.glob<{ default: any }>('/src/images/*.{jpeg,jpg,png,gif,webp,avif,JPG,JPEG,PNG,GIF,WEBP,AVIF}', {
+      eager: true 
     });
+    
+    // Create image map more efficiently
+    const imageMap = Object.fromEntries(
+      Object.entries(imageModules).map(([path, module]) => [
+        path.split('/').pop()!,
+        module.default
+      ])
+    );
 
-    // Sort images by date_taken in descending order (newest first)
-    const sortedImages = images.sort((a, b) => {
-      const dateA = new Date(a.dateTaken);
-      const dateB = new Date(b.dateTaken);
-      return dateB.getTime() - dateA.getTime(); // Descending order
-    });
+    // Process images with better error handling
+    const processedImages = await Promise.allSettled(
+      metadata.images.map(async (imageData: any) => {
+        const importedImage = imageMap[imageData.filename];
+        
+        if (!importedImage) {
+          throw new Error(`Image not found: ${imageData.filename}`);
+        }
 
-    // Remove the dateTaken property before returning
-    return sortedImages.map(({ dateTaken, ...rest }) => rest);
+        const alt = imageData.title || 
+                   imageData.description || 
+                   path.basename(imageData.filename, path.extname(imageData.filename));
+
+        return {
+          src: importedImage,
+          alt,
+          metadata: {
+            filename: imageData.filename,
+            dimensions: imageData.dimensions,
+            camera_make: imageData.camera_make,
+            camera_model: imageData.camera_model,
+            iso: imageData.iso,
+            aperture: imageData.aperture,
+            shutter_speed: imageData.shutter_speed,
+            focal_length: imageData.focal_length,
+            date_taken: imageData.date_taken,
+            rating: imageData.rating,
+            title: imageData.title,
+            description: imageData.description,
+            latitude: imageData.latitude,
+            longitude: imageData.longitude,
+          },
+          dateTaken: new Date(imageData.date_taken).getTime(), // Convert to timestamp for easier sorting
+        };
+      })
+    );
+
+    // Filter successful results and log failures
+    const validImages = processedImages
+      .filter((result): result is PromiseFulfilledResult<any> => {
+        if (result.status === 'rejected') {
+          console.warn('Failed to process image:', result.reason);
+          return false;
+        }
+        return true;
+      })
+      .map(result => result.value);
+
+    // Sort by date (newest first) and clean up
+    return validImages
+      .sort((a, b) => b.dateTaken - a.dateTaken)
+      .map(({ dateTaken, ...rest }) => rest);
+
   } catch (error) {
-    console.error('Error loading gallery images from metadata:', error);
+    console.error('Error loading gallery images:', error);
     return [];
   }
 }
 
-// Function to optimize an image for display
-export async function optimizeImage(
-  src: string,
-  options: { width: number; height?: number; format?: 'avif' | 'jpeg' | 'png' | 'webp' }
-) {
-  try {
-    // In a real implementation, we would use getImage from astro:assets
-    // This is a placeholder for demonstration
-    return {
-      src,
-      ...options,
-    };
-  } catch (error) {
-    console.error('Error optimizing image:', error);
-    return { src, width: options.width, height: options.height || 0 };
-  }
+// Simplified utility functions
+export function getResponsiveImageWidth(index: number): number {
+  return index < 3 ? 1600 : 1200;
+}
+
+export function optimizeImage(src: any, options: { width?: number; quality?: number } = {}) {
+  // Astro handles optimization automatically
+  return src;
 }

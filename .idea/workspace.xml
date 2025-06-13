@@ -5,7 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: add deployment for photo_gallery to sideproject-docker-stack">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/file_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/file_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/workflow.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -58,7 +64,7 @@
       <workItem from="1749681220573" duration="115000" />
       <workItem from="1749712255896" duration="6359000" />
       <workItem from="1749752449418" duration="1078000" />
-      <workItem from="1749762360217" duration="164000" />
+      <workItem from="1749762360217" duration="5317000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />

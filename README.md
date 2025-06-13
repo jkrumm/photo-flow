@@ -10,6 +10,7 @@ A CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow f
 - Backup RAW files
 - Copy videos to external SSD
 - Automatically clean up unused RAW files during finalization
+- Sync high-rated photos to a gallery with intelligent file handling
 
 ## Installation
 
@@ -76,6 +77,26 @@ photoflow finalize
 ```
 
 This moves approved photos from staging to the final folder, copies them back to the camera for viewing, and removes RAW files that don't have corresponding JPGs in the final folder.
+
+### Sync Gallery
+
+```bash
+photoflow sync-gallery
+```
+
+This syncs high-rated photos (rating 4+) to a gallery folder and generates metadata JSON:
+- Copies new high-rated images to the gallery
+- Updates existing images only if they've changed (using fast hash comparison)
+- Removes images from the gallery that no longer have a rating of 4+
+- Preserves other files in the gallery
+- Generates metadata JSON for all high-rated images
+- Builds the gallery and syncs it to a remote server
+
+To preview without copying:
+
+```bash
+photoflow sync-gallery --dry-run
+```
 
 ## File Structure
 

@@ -123,6 +123,7 @@ def sync_gallery(dry_run):
 
     click.echo("Gallery Sync Results:")
     click.echo(f"  Images synced to gallery: {stats['synced']}")
+    click.echo(f"  Images unchanged (already up-to-date): {stats.get('unchanged', 0)}")
     click.echo(f"  Images removed from gallery: {stats['removed']}")
     click.echo(f"  Metadata JSON updated: {'Yes' if stats['json_updated'] else 'No'}")
     click.echo(f"  Total images in gallery: {stats['total_in_gallery']}")

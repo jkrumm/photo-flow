@@ -1,0 +1,22 @@
+---
+import { Image } from 'astro:assets';
+import type { ImageData } from '../utils/images';
+
+interface Props {
+  image: ImageData;
+}
+
+const { image } = Astro.props;
+const { src, alt, metadata } = image;
+---
+
+<div class="px-4 pt-5 sm:px-10 sm:pt-10 md:px-15 md:pt-15 lg:px-20 lg:pt-20">
+  <Image 
+    src={src} 
+    alt={alt} 
+    width={1680} 
+    height={1200} 
+    class="w-full h-auto max-w-[1680px] max-h-[calc(100vh-20px)] sm:max-h-[calc(100vh-40px)] md:max-h-[calc(100vh-90px)] lg:max-h-[calc(100vh-120px)] object-contain mx-auto"
+    quality={90}
+  />
+</div>

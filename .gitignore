@@ -44,8 +44,8 @@ photo_gallery/package-lock.json
 photo_gallery/.turbo/
 photo_gallery/.eslintcache
 photo_gallery/.pnpm-store
-photo_gallery/public/images
-photo_gallery/public/metadata.json
+photo_gallery/src/images
+photo_gallery/src/metadata.json
 
 # do not commit .env files or any files that end with `.env`
 *.env

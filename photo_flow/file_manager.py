@@ -64,6 +64,8 @@ class FileManager:
     This class provides methods for scanning camera files, checking for duplicates,
     safely copying files, and generating file hashes for verification.
     """
+    # Class-level cache for file hashes to avoid recomputing
+    _hash_cache = {}
 
     @staticmethod
     def scan_camera_files() -> Dict[str, List[Path]]:
@@ -89,10 +91,10 @@ class FileManager:
 
         return result
 
-    @staticmethod
-    def is_duplicate(src: Path, dst: Path) -> bool:
+    @classmethod
+    def is_duplicate(cls, src: Path, dst: Path) -> bool:
         """
-        Check if a file is a duplicate by comparing file hashes.
+        Check if a file is a duplicate by comparing file sizes first, then hashes if needed.
 
         Args:
             src (Path): Source file path
@@ -104,13 +106,18 @@ class FileManager:
         if not dst.exists():
             return False
 
-        src_hash = FileManager.get_file_hash(src)
-        dst_hash = FileManager.get_file_hash(dst)
+        # Quick check: if file sizes differ, files cannot be identical
+        if src.stat().st_size != dst.stat().st_size:
+            return False
+
+        # If file sizes match, compare hashes for definitive check
+        src_hash = cls.get_file_hash(src)
+        dst_hash = cls.get_file_hash(dst)
 
         return src_hash == dst_hash
 
-    @staticmethod
-    def safe_copy(src: Path, dst: Path) -> bool:
+    @classmethod
+    def safe_copy(cls, src: Path, dst: Path) -> bool:
         """
         Safely copy a file, preserving metadata.
         First checks if the destination file already exists and is identical to the source.
@@ -127,7 +134,7 @@ class FileManager:
             dst.parent.mkdir(parents=True, exist_ok=True)
 
             # Check if destination file already exists and is identical
-            if dst.exists() and FileManager.is_duplicate(src, dst):
+            if dst.exists() and cls.is_duplicate(src, dst):
                 # File already exists and is identical, no need to copy
                 return True
 
@@ -135,27 +142,68 @@ class FileManager:
             shutil.copy2(src, dst)
 
             # Verify copy was successful
-            return FileManager.is_duplicate(src, dst)
+            return cls.is_duplicate(src, dst)
         except Exception:
             return False
 
-    @staticmethod
-    def get_file_hash(file_path: Path) -> str:
+    @classmethod
+    def get_file_hash(cls, file_path: Path, partial: bool = True) -> str:
         """
         Generate a hash for a file.
 
+        When partial=True (default), only reads the first and last 1MB of the file
+        for large files (>10MB), which is much faster but still reliable for
+        detecting most differences.
+
         Args:
             file_path (Path): Path to the file
+            partial (bool): Whether to use partial hashing for large files
 
         Returns:
             str: Hexadecimal hash string
         """
-        hash_md5 = hashlib.md5()
-
         try:
+            # Get file stats for cache key and size check
+            file_stat = file_path.stat()
+            file_size = file_stat.st_size
+
+            # Create a cache key based on file path, size, modification time, and partial flag
+            cache_key = (str(file_path), file_size, file_stat.st_mtime, partial)
+
+            # Check if hash is in cache
+            if cache_key in cls._hash_cache:
+                return cls._hash_cache[cache_key]
+
+            # Not in cache, compute hash
+            hash_md5 = hashlib.md5()
+
+            # For small files or when partial=False, hash the entire file
+            if not partial or file_size <= 10 * 1024 * 1024:  # 10MB threshold
+                with open(file_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        hash_md5.update(chunk)
+                result = hash_md5.hexdigest()
+                cls._hash_cache[cache_key] = result
+                return result
+
+            # For large files, hash only the first and last 1MB
             with open(file_path, "rb") as f:
+                # Hash first 1MB
+                for _ in range(256):  # 256 * 4KB = 1MB
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    hash_md5.update(chunk)
+
+                # Move to 1MB before the end of file
+                f.seek(max(file_size - 1024 * 1024, 0))
+
+                # Hash last 1MB
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_md5.update(chunk)
-            return hash_md5.hexdigest()
+
+            result = hash_md5.hexdigest()
+            cls._hash_cache[cache_key] = result
+            return result
         except Exception:
             return ""

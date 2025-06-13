@@ -1,4 +1,4 @@
-import { defineConfig } from 'astro/config';
+import {defineConfig} from 'astro/config';
 import tailwind from '@astrojs/tailwind';
 import react from '@astrojs/react';
 
@@ -8,12 +8,10 @@ export default defineConfig({
     tailwind(),
     react()
   ],
+  output: 'static',
   image: {
     service: {
       entrypoint: 'astro/assets/services/sharp'
-    },
-    domains: [],
-    remotePatterns: []
-  },
-  output: 'static'
+    }
+  }
 });

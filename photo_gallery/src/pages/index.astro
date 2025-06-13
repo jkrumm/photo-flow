@@ -1,15 +1,8 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import Gallery from '../components/Gallery';
-import { getGalleryImages } from '../utils/images';
-
-// Get all images from the public directory
-const galleryImages = await getGalleryImages();
-
-// Page title
-const title = 'Johannes Photos';
+import ImageGallery from '../components/ImageGallery.astro';
 ---
 
-<Layout title={title}>
-  <Gallery images={galleryImages} client:load />
+<Layout title="Johannes Photos">
+  <ImageGallery />
 </Layout>
