@@ -51,8 +51,12 @@ def import_cmd(dry_run):
 
     # Define progress callback function
     def progress_callback(message):
-        # Clear the current line and print the progress message
-        click.echo(f"\r\033[K{message}", nl=False)
+        # For error messages, print with newline and in red
+        if message.startswith("ERROR:"):
+            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+        else:
+            # Clear the current line and print the progress message
+            click.echo(f"\r\033[K{message}", nl=False)
 
     # Call import_from_camera with progress callback
     stats = workflow.import_from_camera(dry_run=dry_run, progress_callback=progress_callback)
@@ -81,8 +85,12 @@ def finalize(dry_run):
 
     # Define progress callback function
     def progress_callback(message):
-        # Clear the current line and print the progress message
-        click.echo(f"\r\033[K{message}", nl=False)
+        # For error messages, print with newline and in red
+        if message.startswith("ERROR:"):
+            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+        else:
+            # Clear the current line and print the progress message
+            click.echo(f"\r\033[K{message}", nl=False)
 
     # Call finalize_staging with progress callback
     stats = workflow.finalize_staging(dry_run=dry_run, progress_callback=progress_callback)
@@ -95,6 +103,7 @@ def finalize(dry_run):
     click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
     click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")
     click.echo(f"  Orphaned RAW files deleted: {stats['deleted_raws']}")
+    click.echo(f"  RAW files deleted from camera: {stats['deleted_camera_raws']}")
     click.echo(f"  Files skipped (already exist): {stats['skipped']}")
 
     if stats['errors'] > 0:
@@ -112,8 +121,12 @@ def sync_gallery(dry_run):
 
     # Define progress callback function
     def progress_callback(message):
-        # Clear the current line and print the progress message
-        click.echo(f"\r\033[K{message}", nl=False)
+        # For error messages, print with newline and in red
+        if message.startswith("ERROR:"):
+            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+        else:
+            # Clear the current line and print the progress message
+            click.echo(f"\r\033[K{message}", nl=False)
 
     # Call sync_gallery with progress callback
     stats = workflow.sync_gallery(dry_run=dry_run, progress_callback=progress_callback)

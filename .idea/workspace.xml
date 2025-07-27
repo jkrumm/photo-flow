@@ -5,9 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: add deployment for photo_gallery to sideproject-docker-stack">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/photo_flow/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/cli.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/photo_flow/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/photo_flow/file_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/file_manager.py" afterDir="false" />
@@ -48,8 +46,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
-        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
+        <option value="bundled-js-predefined-d6986cc7102b-09060db00ec0-JavaScript-PY-251.26927.90" />
+        <option value="bundled-python-sdk-41e8cd69c857-64d779b69b7a-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.26927.90" />
       </set>
     </attachedChunks>
   </component>
@@ -64,7 +62,9 @@
       <workItem from="1749681220573" duration="115000" />
       <workItem from="1749712255896" duration="6359000" />
       <workItem from="1749752449418" duration="1078000" />
-      <workItem from="1749762360217" duration="5317000" />
+      <workItem from="1749762360217" duration="8603000" />
+      <workItem from="1752786978760" duration="407000" />
+      <workItem from="1752788472785" duration="3056000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />

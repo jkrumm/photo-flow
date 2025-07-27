@@ -57,7 +57,7 @@ class PhotoWorkflow:
         Returns:
             Dict with 'processed', 'skipped', 'errors' counts
         """
-        stats = {'processed': 0, 'skipped': 0, 'errors': 0, 'errors': 0}
+        stats = {'processed': 0, 'skipped': 0, 'errors': 0}
 
         for i, file_path in enumerate(files):
             if progress_callback and i % 10 == 0:
@@ -70,19 +70,32 @@ class PhotoWorkflow:
             dst_path = destination / file_path.name
 
             # Check if destination already exists and is identical
-            if dst_path.exists() and self.file_manager.is_duplicate(file_path, dst_path):
+            is_dup, error = self.file_manager.is_duplicate(file_path, dst_path)
+            if error:
+                stats['errors'] += 1
+                if progress_callback:
+                    progress_callback(f"ERROR: {error}")
+                continue
+
+            if dst_path.exists() and is_dup:
                 stats['skipped'] += 1
                 if progress_callback:
                     progress_callback(f"Skipping {file_type} {file_path.name} (already exists)")
-            elif self.file_manager.safe_copy(file_path, dst_path):
-                stats['processed'] += 1
-                if delete_original:
-                    try:
-                        file_path.unlink()
-                    except Exception:
-                        stats['errors'] += 1
             else:
-                stats['errors'] += 1
+                success, error = self.file_manager.safe_copy(file_path, dst_path)
+                if success:
+                    stats['processed'] += 1
+                    if delete_original:
+                        try:
+                            file_path.unlink()
+                        except Exception as e:
+                            stats['errors'] += 1
+                            if progress_callback:
+                                progress_callback(f"ERROR: Failed to delete original file {file_path}: {str(e)}")
+                else:
+                    stats['errors'] += 1
+                    if progress_callback:
+                        progress_callback(f"ERROR: {error}")
 
         return stats
 
@@ -150,7 +163,8 @@ class PhotoWorkflow:
         if progress_callback and mov_files:
             progress_callback(f"Processing {len(mov_files)} videos...")
         mov_stats = self._process_files(mov_files, SSD_PATH, "video",
-                                        progress_wrapper if not dry_run else progress_callback, dry_run)
+                                        progress_wrapper if not dry_run else progress_callback, 
+                                        dry_run, delete_original=True)  # Explicitly set delete_original=True
 
         if progress_callback and jpg_files:
             progress_callback(f"Processing {len(jpg_files)} photos...")
@@ -190,6 +204,7 @@ class PhotoWorkflow:
             'copied_to_camera': 0,
             'orphaned_raws': 0,
             'deleted_raws': 0,
+            'deleted_camera_raws': 0,  # New field for tracking RAWs deleted from camera
             'skipped': 0,
             'errors': 0
         }
@@ -259,14 +274,65 @@ class PhotoWorkflow:
             if final_files and progress_callback:
                 progress_callback(f"Copying {len(final_files)} photos back to camera...")
 
-            camera_stats = self._process_files(final_files, CAMERA_PATH, "photo",
-                                               progress_wrapper if not dry_run else progress_callback,
-                                               dry_run, delete_original=False)
-            stats['copied_to_camera'] = camera_stats['processed']
-            stats['skipped'] += camera_stats['skipped']
-            stats['errors'] += camera_stats['errors']
+            # Find the first available camera folder (e.g., 102_FUJI, 103_FUJI)
+            camera_folders = [folder for folder in CAMERA_PATH.glob('*_*') if folder.is_dir()]
+
+            if camera_folders:
+                # Use the first folder found (could be sorted if needed)
+                camera_folder = camera_folders[0]
+                if progress_callback:
+                    progress_callback(f"Using camera folder: {camera_folder.name}")
+
+                camera_stats = self._process_files(final_files, camera_folder, "photo",
+                                                  progress_wrapper if not dry_run else progress_callback,
+                                                  dry_run, delete_original=False)
+                stats['copied_to_camera'] = camera_stats['processed']
+                stats['skipped'] += camera_stats['skipped']
+                stats['errors'] += camera_stats['errors']
+            else:
+                if progress_callback:
+                    progress_callback("No camera folders found in DCIM directory. Skipping copy back to camera.")
+                stats['errors'] += 1
         elif progress_callback:
             progress_callback("Camera not connected. Skipping copy back to camera.")
+
+        # Delete RAW files from camera for finalized images
+        if CAMERA_PATH.exists() and FINAL_PATH.exists():
+            if progress_callback:
+                progress_callback("Checking for RAW files on camera that can be deleted...")
+
+            # Get all JPGs in the final folder
+            final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
+            final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+
+            # Scan camera for RAW files
+            camera_files = self.file_manager.scan_camera_files()
+            camera_raws = camera_files.get('.RAF', [])
+
+            # Find RAW files on camera that have corresponding JPGs in final folder
+            finalized_raws = [raw for raw in camera_raws if raw.stem in final_jpg_bases]
+
+            if finalized_raws and progress_callback:
+                progress_callback(f"Deleting {len(finalized_raws)} RAW files from camera...")
+
+            # Delete RAW files from camera
+            deleted_count = 0
+            for raw_file in finalized_raws:
+                if not dry_run:
+                    try:
+                        raw_file.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        if progress_callback:
+                            progress_callback(f"ERROR: Failed to delete RAW file {raw_file}: {str(e)}")
+                else:
+                    deleted_count += 1
+
+            stats['deleted_camera_raws'] = deleted_count
+
+            if progress_callback:
+                progress_callback(f"Deleted {deleted_count} RAW files from camera")
 
         # Clean up orphaned RAW files
         if progress_callback:
@@ -536,7 +602,10 @@ class PhotoWorkflow:
                     img_path.unlink()
                     stats['removed'] += 1
                 except Exception as e:
-                    print(f"Error removing {img_path}: {e}")
+                    error_msg = f"Error removing {img_path}: {e}"
+                    print(error_msg)
+                    if progress_callback:
+                        progress_callback(f"ERROR: {error_msg}")
                     stats['errors'] += 1
 
         # Copy high-rated images to gallery
@@ -580,10 +649,20 @@ class PhotoWorkflow:
             # Copy the file if it has changed
             if not dry_run:
                 try:
-                    FileManager.safe_copy(src_path, dst_path)
-                    stats['synced'] += 1
+                    success, error = FileManager.safe_copy(src_path, dst_path)
+                    if success:
+                        stats['synced'] += 1
+                    else:
+                        error_msg = f"Error updating {src_path.name}: {error}"
+                        print(error_msg)
+                        if progress_callback:
+                            progress_callback(f"ERROR: {error_msg}")
+                        stats['errors'] += 1
                 except Exception as e:
-                    print(f"Error updating {src_path.name}: {e}")
+                    error_msg = f"Error updating {src_path.name}: {e}"
+                    print(error_msg)
+                    if progress_callback:
+                        progress_callback(f"ERROR: {error_msg}")
                     stats['errors'] += 1
             else:
                 # In dry run mode, just count it
@@ -658,15 +737,22 @@ class PhotoWorkflow:
                 stats['sync_successful'] = True
 
             except subprocess.CalledProcessError as e:
-                print(f"Error during build or sync: {e}")
-                print(f"Command output: {e.stdout}")
-                print(f"Command error: {e.stderr}")
+                error_msg = f"Error during build or sync: {e}"
+                stdout_msg = f"Command output: {e.stdout}"
+                stderr_msg = f"Command error: {e.stderr}"
+
+                print(error_msg)
+                print(stdout_msg)
+                print(stderr_msg)
+
                 stats['errors'] += 1
                 stats['build_successful'] = False
                 stats['sync_successful'] = False
 
                 if progress_callback:
-                    progress_callback(f"Error during build or sync: {e}")
+                    progress_callback(f"ERROR: {error_msg}")
+                    progress_callback(f"ERROR: {stdout_msg}")
+                    progress_callback(f"ERROR: {stderr_msg}")
         else:
             # In dry run mode
             if progress_callback:

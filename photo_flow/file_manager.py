@@ -70,7 +70,7 @@ class FileManager:
     @staticmethod
     def scan_camera_files() -> Dict[str, List[Path]]:
         """
-        Scan the camera directory for files and categorize them by extension.
+        Scan all folders in the camera DCIM directory for files and categorize them by extension.
 
         Returns:
             Dict[str, List[Path]]: Dictionary with extensions as keys and lists of file paths as values.
@@ -80,19 +80,25 @@ class FileManager:
         if not CAMERA_PATH.exists():
             return result
 
-        for file_path in CAMERA_PATH.glob('*'):
-            # Skip macOS resource fork files and other system files
-            if not is_valid_image_file(file_path):
+        # Look for all folders in the DCIM directory (like 102_FUJI, 103_FUJI, etc.)
+        for folder in CAMERA_PATH.glob('*_*'):
+            if not folder.is_dir():
                 continue
 
-            ext = file_path.suffix.upper()
-            if ext in EXTENSIONS:
-                result[ext].append(file_path)
+            # Scan each folder for files
+            for file_path in folder.glob('*'):
+                # Skip macOS resource fork files and other system files
+                if not is_valid_image_file(file_path):
+                    continue
+
+                ext = file_path.suffix.upper()
+                if ext in EXTENSIONS:
+                    result[ext].append(file_path)
 
         return result
 
     @classmethod
-    def is_duplicate(cls, src: Path, dst: Path) -> bool:
+    def is_duplicate(cls, src: Path, dst: Path) -> tuple[bool, str]:
         """
         Check if a file is a duplicate by comparing file sizes first, then hashes if needed.
 
@@ -101,23 +107,33 @@ class FileManager:
             dst (Path): Destination file path
 
         Returns:
-            bool: True if files are identical, False otherwise
+            tuple[bool, str]: (is_duplicate, error_message) - is_duplicate is True if files are identical,
+                             False otherwise. error_message contains details if an error occurred,
+                             empty string otherwise.
         """
         if not dst.exists():
-            return False
+            return False, ""
 
         # Quick check: if file sizes differ, files cannot be identical
-        if src.stat().st_size != dst.stat().st_size:
-            return False
+        try:
+            if src.stat().st_size != dst.stat().st_size:
+                return False, ""
+        except Exception as e:
+            return False, f"Error comparing file sizes: {str(e)}"
 
         # If file sizes match, compare hashes for definitive check
-        src_hash = cls.get_file_hash(src)
-        dst_hash = cls.get_file_hash(dst)
+        src_hash, src_error = cls.get_file_hash(src)
+        if src_error:
+            return False, src_error
 
-        return src_hash == dst_hash
+        dst_hash, dst_error = cls.get_file_hash(dst)
+        if dst_error:
+            return False, dst_error
+
+        return src_hash == dst_hash, ""
 
     @classmethod
-    def safe_copy(cls, src: Path, dst: Path) -> bool:
+    def safe_copy(cls, src: Path, dst: Path) -> tuple[bool, str]:
         """
         Safely copy a file, preserving metadata.
         First checks if the destination file already exists and is identical to the source.
@@ -127,27 +143,39 @@ class FileManager:
             dst (Path): Destination file path
 
         Returns:
-            bool: True if copy was successful or file already exists, False otherwise
+            tuple[bool, str]: (success, error_message) - success is True if copy was successful 
+                             or file already exists, False otherwise. error_message contains 
+                             details if an error occurred, empty string otherwise.
         """
         try:
             # Create destination directory if it doesn't exist
             dst.parent.mkdir(parents=True, exist_ok=True)
 
             # Check if destination file already exists and is identical
-            if dst.exists() and cls.is_duplicate(src, dst):
-                # File already exists and is identical, no need to copy
-                return True
+            if dst.exists():
+                is_dup, error = cls.is_duplicate(src, dst)
+                if error:
+                    return False, error
+                if is_dup:
+                    # File already exists and is identical, no need to copy
+                    return True, ""
 
             # Copy file with metadata
             shutil.copy2(src, dst)
 
             # Verify copy was successful
-            return cls.is_duplicate(src, dst)
-        except Exception:
-            return False
+            is_dup, error = cls.is_duplicate(src, dst)
+            if error:
+                return False, error
+            if is_dup:
+                return True, ""
+            else:
+                return False, f"Verification failed: copied file does not match source for {src}"
+        except Exception as e:
+            return False, f"Error copying {src} to {dst}: {str(e)}"
 
     @classmethod
-    def get_file_hash(cls, file_path: Path, partial: bool = True) -> str:
+    def get_file_hash(cls, file_path: Path, partial: bool = True) -> tuple[str, str]:
         """
         Generate a hash for a file.
 
@@ -160,7 +188,8 @@ class FileManager:
             partial (bool): Whether to use partial hashing for large files
 
         Returns:
-            str: Hexadecimal hash string
+            tuple[str, str]: (hash_string, error_message) - hash_string is the hexadecimal hash,
+                            error_message contains details if an error occurred, empty string otherwise.
         """
         try:
             # Get file stats for cache key and size check
@@ -172,7 +201,7 @@ class FileManager:
 
             # Check if hash is in cache
             if cache_key in cls._hash_cache:
-                return cls._hash_cache[cache_key]
+                return cls._hash_cache[cache_key], ""
 
             # Not in cache, compute hash
             hash_md5 = hashlib.md5()
@@ -184,7 +213,7 @@ class FileManager:
                         hash_md5.update(chunk)
                 result = hash_md5.hexdigest()
                 cls._hash_cache[cache_key] = result
-                return result
+                return result, ""
 
             # For large files, hash only the first and last 1MB
             with open(file_path, "rb") as f:
@@ -204,6 +233,6 @@ class FileManager:
 
             result = hash_md5.hexdigest()
             cls._hash_cache[cache_key] = result
-            return result
-        except Exception:
-            return ""
+            return result, ""
+        except Exception as e:
+            return "", f"Error generating hash for {file_path}: {str(e)}"
