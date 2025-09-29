@@ -10,9 +10,10 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "Click>=8.0",
-        "Pillow>=9.0",
+        "Click>=8.1.8",
+        "Pillow>=11.2.1",
         "piexif>=1.1.3",
+        "defusedxml>=0.7.1"
     ],
     entry_points={
         "console_scripts": [

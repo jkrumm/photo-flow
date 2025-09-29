@@ -4,9 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: print errors to console &amp; flexible folders">
+    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="fix: sync_gallery job now switches to correct node version">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/photo_flow/workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/workflow.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,7 +66,7 @@
       <workItem from="1752786978760" duration="407000" />
       <workItem from="1752788472785" duration="3697000" />
       <workItem from="1754083307870" duration="87000" />
-      <workItem from="1759172956720" duration="1196000" />
+      <workItem from="1759172956720" duration="1930000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />
@@ -123,7 +124,15 @@
       <option name="project" value="LOCAL" />
       <updated>1753617081580</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="fix: sync_gallery job now switches to correct node version">
+      <option name="closed" value="true" />
+      <created>1759174166380</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1759174166380</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -148,6 +157,7 @@
     <MESSAGE value="feat: implement progress bars" />
     <MESSAGE value="feat: add deployment for photo_gallery to sideproject-docker-stack" />
     <MESSAGE value="feat: print errors to console &amp; flexible folders" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat: print errors to console &amp; flexible folders" />
+    <MESSAGE value="fix: sync_gallery job now switches to correct node version" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: sync_gallery job now switches to correct node version" />
   </component>
 </project>
