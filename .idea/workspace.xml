@@ -4,10 +4,12 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="fix: sync_gallery job now switches to correct node version">
+    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: able to globally install CLI">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.junie/guidelines.md" beforeDir="false" afterPath="$PROJECT_DIR$/.junie/guidelines.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/workflow.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -66,7 +68,7 @@
       <workItem from="1752786978760" duration="407000" />
       <workItem from="1752788472785" duration="3697000" />
       <workItem from="1754083307870" duration="87000" />
-      <workItem from="1759172956720" duration="1930000" />
+      <workItem from="1759172956720" duration="3628000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />
@@ -132,7 +134,15 @@
       <option name="project" value="LOCAL" />
       <updated>1759174166380</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="feat: able to globally install CLI">
+      <option name="closed" value="true" />
+      <created>1759175143959</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1759175143959</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -158,6 +168,7 @@
     <MESSAGE value="feat: add deployment for photo_gallery to sideproject-docker-stack" />
     <MESSAGE value="feat: print errors to console &amp; flexible folders" />
     <MESSAGE value="fix: sync_gallery job now switches to correct node version" />
-    <option name="LAST_COMMIT_MESSAGE" value="fix: sync_gallery job now switches to correct node version" />
+    <MESSAGE value="feat: able to globally install CLI" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: able to globally install CLI" />
   </component>
 </project>

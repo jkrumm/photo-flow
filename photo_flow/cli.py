@@ -153,5 +153,55 @@ def sync_gallery(dry_run):
         click.echo(f"  Errors encountered: {stats['errors']}")
 
 
+@photoflow.command()
+@click.option('--dry-run', is_flag=True, help='Simulate RAW cleanup without deleting files')
+def cleanup(dry_run):
+    """Remove unused RAW files that don't have corresponding JPGs in the Final folder."""
+    workflow = PhotoWorkflow()
+
+    if dry_run:
+        click.echo("DRY RUN: Simulating RAW cleanup (no files will be deleted)")
+
+    # Define progress callback function
+    def progress_callback(message):
+        # For error messages, print with newline and in red
+        if message.startswith("ERROR:"):
+            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+        else:
+            # Clear the current line and print the progress message
+            click.echo(f"\r\033[K{message}", nl=False)
+
+    # Always preview first to show what would be deleted
+    preview_stats = workflow.cleanup_unused_raws(dry_run=True, progress_callback=progress_callback)
+
+    # Print a newline to ensure results start on a new line
+    click.echo("\n")
+
+    click.echo("RAW Cleanup Preview:")
+    click.echo(f"  Orphaned RAW files found: {preview_stats['orphaned']}")
+
+    if dry_run or preview_stats['orphaned'] == 0:
+        if preview_stats['orphaned'] == 0:
+            click.echo("  Nothing to delete.")
+        return
+
+    # Ask for confirmation before deleting
+    if not click.confirm(f"Delete {preview_stats['orphaned']} orphaned RAW files?", default=False):
+        click.echo("Aborted. No files were deleted.")
+        return
+
+    # Perform deletion
+    stats = workflow.cleanup_unused_raws(dry_run=False, progress_callback=progress_callback)
+
+    # Print a newline to ensure results start on a new line
+    click.echo("\n")
+
+    click.echo("RAW Cleanup Results:")
+    click.echo(f"  Orphaned RAW files deleted: {stats['deleted']}")
+
+    if stats['errors'] > 0:
+        click.echo(f"  Errors encountered: {stats['errors']}")
+
+
 if __name__ == '__main__':
     photoflow()

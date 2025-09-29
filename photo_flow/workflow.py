@@ -163,7 +163,7 @@ class PhotoWorkflow:
         if progress_callback and mov_files:
             progress_callback(f"Processing {len(mov_files)} videos...")
         mov_stats = self._process_files(mov_files, SSD_PATH, "video",
-                                        progress_wrapper if not dry_run else progress_callback, 
+                                        progress_wrapper if not dry_run else progress_callback,
                                         dry_run, delete_original=True)  # Explicitly set delete_original=True
 
         if progress_callback and jpg_files:
@@ -284,8 +284,8 @@ class PhotoWorkflow:
                     progress_callback(f"Using camera folder: {camera_folder.name}")
 
                 camera_stats = self._process_files(final_files, camera_folder, "photo",
-                                                  progress_wrapper if not dry_run else progress_callback,
-                                                  dry_run, delete_original=False)
+                                                   progress_wrapper if not dry_run else progress_callback,
+                                                   dry_run, delete_original=False)
                 stats['copied_to_camera'] = camera_stats['processed']
                 stats['skipped'] += camera_stats['skipped']
                 stats['errors'] += camera_stats['errors']
@@ -615,10 +615,10 @@ class PhotoWorkflow:
 
             # Use the generic process_files method for copying
             copy_stats = self._process_files(
-                images_to_copy, 
-                gallery_images_path, 
+                images_to_copy,
+                gallery_images_path,
                 "gallery image",
-                progress_callback, 
+                progress_callback,
                 dry_run,
                 delete_original=False  # Don't delete original files
             )
@@ -632,7 +632,8 @@ class PhotoWorkflow:
             progress_callback("Checking existing high-rated images for changes...")
 
         # Images to update (high-rated and already in gallery)
-        images_to_update = [(img[0], img[1]) for img in high_rated_images if img[0].name in existing_gallery_image_names]
+        images_to_update = [(img[0], img[1]) for img in high_rated_images if
+                            img[0].name in existing_gallery_image_names]
 
         # Count of unchanged images
         unchanged_count = 0
@@ -642,7 +643,12 @@ class PhotoWorkflow:
             dst_path = gallery_images_path / src_path.name
 
             # Skip if files are identical
-            if FileManager.is_duplicate(src_path, dst_path):
+            is_dup, err = FileManager.is_duplicate(src_path, dst_path)
+            if err:
+                if progress_callback:
+                    progress_callback(f"ERROR: {err}")
+                stats['errors'] += 1
+            elif is_dup:
                 unchanged_count += 1
                 continue
 
