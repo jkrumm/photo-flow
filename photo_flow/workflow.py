@@ -3,7 +3,7 @@ Workflow management for the Photo-Flow application.
 
 This module provides the main workflow logic for the application.
 """
-
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
@@ -701,13 +701,29 @@ class PhotoWorkflow:
                 progress_callback("Building gallery with npm run build...")
 
             try:
+                # Read the required Node version from .nvmrc
+                nvmrc_path = photo_gallery_path / ".nvmrc"
+                if nvmrc_path.exists():
+                    with open(nvmrc_path, 'r') as f:
+                        node_version = f.read().strip()
+
+                    # Remove 'v' prefix if present for the path
+                    node_version_clean = node_version.lstrip('v')
+                    node_version_path = os.path.expanduser(f"~/.nvm/versions/node/v{node_version_clean}/bin")
+
+                    env = os.environ.copy()
+                    env["PATH"] = f"{node_version_path}:{env['PATH']}"
+                else:
+                    env = None
+
                 # Change to photo_gallery directory and run npm build
                 build_process = subprocess.run(
                     ["npm", "run", "build"],
                     cwd=photo_gallery_path,
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    env=env
                 )
 
                 if progress_callback:
