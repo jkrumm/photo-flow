@@ -4,12 +4,13 @@ Workflow management for the Photo-Flow application.
 This module provides the main workflow logic for the application.
 """
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 from typing import Dict, List
 
-from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH
+from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH, HOMELAB_USER, HOMELAB_HOST, HOMELAB_DEST_PATH, RSYNC_FLAGS, RSYNC_SSH_BASE, RSYNC_SSH_JUMP
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
@@ -783,5 +784,87 @@ class PhotoWorkflow:
             # Add build and sync info to stats for dry run
             stats['build_successful'] = False
             stats['sync_successful'] = False
+
+        return stats
+
+    def backup_final_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+        """
+        Backup the Final folder to the homelab server via rsync.
+
+        Uses rsync for safe, interruptible syncing. In dry-run mode, no changes
+        are made on the remote side and rsync runs with -n.
+
+        Automatically tries direct connection first (IPv6), then falls back to
+        ProxyJump via VPS if direct connection fails (IPv4-only networks).
+
+        Returns:
+            Dict with keys: 'scanned', 'sync_successful' (bool), 'errors' (int), 'connection_method' (str)
+        """
+        stats = {
+            'scanned': 0,
+            'sync_successful': False,
+            'errors': 0,
+            'connection_method': None,
+        }
+
+        # Pre-checks
+        if not FINAL_PATH.exists():
+            if progress_callback:
+                progress_callback("Final folder does not exist. Nothing to backup.")
+            return stats
+
+        if shutil.which("rsync") is None:
+            if progress_callback:
+                progress_callback("ERROR: rsync not found on PATH. Please install rsync.")
+            stats['errors'] += 1
+            return stats
+
+        # Count JPGs (informational)
+        try:
+            jpgs = scan_for_images(FINAL_PATH, '.JPG')
+            stats['scanned'] = len(jpgs)
+        except Exception:
+            # Non-fatal
+            pass
+
+        remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(HOMELAB_DEST_PATH)}"
+        src = f"{str(FINAL_PATH)}/"  # trailing slash = sync contents
+
+        # Try direct connection first (IPv6), then fall back to ProxyJump (IPv4)
+        ssh_configs = [
+            ("direct", RSYNC_SSH_BASE),
+            ("proxyjump", RSYNC_SSH_JUMP)
+        ]
+
+        for method, ssh_cmd in ssh_configs:
+            # Build rsync command
+            cmd = ["rsync"]
+            cmd.extend(RSYNC_FLAGS)
+            cmd.extend(["-e", ssh_cmd])
+            if dry_run:
+                cmd.append("-n")
+            cmd.extend([src, remote])
+
+            if progress_callback:
+                if method == "direct":
+                    progress_callback("Attempting direct connection (IPv6)...")
+                else:
+                    progress_callback("Direct connection failed. Trying ProxyJump via VPS (IPv4)...")
+
+            try:
+                subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
+                stats['sync_successful'] = True
+                stats['connection_method'] = method
+                if progress_callback:
+                    method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
+                    progress_callback(f"Backup completed successfully using {method_desc}.")
+                return stats
+            except subprocess.CalledProcessError as e:
+                if method == "proxyjump":
+                    # Both methods failed
+                    stats['errors'] += 1
+                    if progress_callback:
+                        progress_callback(f"ERROR: Both connection methods failed. Last error: {e}")
+                # Continue to next method
 
         return stats

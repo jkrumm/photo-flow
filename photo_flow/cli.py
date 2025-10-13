@@ -203,5 +203,36 @@ def cleanup(dry_run):
         click.echo(f"  Errors encountered: {stats['errors']}")
 
 
+@photoflow.command(name='backup')
+@click.option('--dry-run', is_flag=True, help='Simulate backup without transferring files')
+def backup(dry_run):
+    """Backup the Final folder to homelab via rsync."""
+    workflow = PhotoWorkflow()
+
+    if dry_run:
+        click.echo("DRY RUN: Simulating backup to homelab (no remote changes)")
+
+    def progress_callback(message):
+        if message.startswith("ERROR:"):
+            click.echo(f"\n\033[91m{message}\033[0m")
+        else:
+            click.echo(f"\r\033[K{message}", nl=False)
+
+    stats = workflow.backup_final_to_homelab(dry_run=dry_run, progress_callback=progress_callback)
+
+    click.echo("\n")
+    click.echo("Backup Results:")
+    click.echo(f"  Files scanned in Final: {stats.get('scanned', 0)}")
+    if not dry_run:
+        click.echo(f"  Backup successful: {'Yes' if stats.get('sync_successful') else 'No'}")
+        if stats.get('connection_method'):
+            method_desc = "direct IPv6" if stats['connection_method'] == "direct" else "ProxyJump via VPS (IPv4)"
+            click.echo(f"  Connection method: {method_desc}")
+    else:
+        click.echo("  Backup would be performed (dry run)")
+    if stats.get('errors', 0) > 0:
+        click.echo(f"  Errors encountered: {stats['errors']}")
+
+
 if __name__ == '__main__':
     photoflow()

@@ -36,6 +36,7 @@ photoflow import
 photoflow finalize
 photoflow cleanup
 photoflow sync-gallery
+photoflow backup
 ```
 That's it! No virtual environments to activate, works from any directory. ✨
 
@@ -105,6 +106,20 @@ photoflow sync-gallery --dry-run
 photoflow sync-gallery
 ```
 
+### `photoflow backup`
+Backup the Final folder to your homelab via rsync:
+- Syncs the contents of Final/ to the remote directory
+- Uses rsync for safe, interruptible transfers (--partial)
+- Keeps remote in sync (uses --delete)
+
+Add `--dry-run` to preview without sending data.
+
+**Example:**
+```bash
+photoflow backup --dry-run
+photoflow backup
+```
+
 ## Configuration
 
 Edit paths in `photo_flow/config.py` to match your system:
@@ -117,6 +132,13 @@ RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
+
+# Remote backup (homelab)
+HOMELAB_USER = "jkrumm"
+HOMELAB_HOST = "homelab.jkrumm.com"
+HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
+RSYNC_SSH = "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```

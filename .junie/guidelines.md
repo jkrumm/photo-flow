@@ -51,6 +51,7 @@ class PhotoWorkflow:
     def cleanup_unused_raws()
     def get_status() -> StatusReport
     def sync_gallery()
+    def backup_final_to_homelab()
 ```
 
 ### 4. CLI Interface (`cli.py`)
@@ -169,9 +170,11 @@ photoflow import                        # Import from camera
 photoflow finalize                      # Staging → Final + back to camera
 photoflow cleanup                       # Remove unused RAWs
 photoflow sync-gallery                  # Sync high-rated photos to gallery
+photoflow backup                        # Backup Final folder to homelab via rsync
 photoflow import --dry-run              # Preview import
 photoflow cleanup --dry-run             # Preview RAW cleanup
 photoflow sync-gallery --dry-run        # Preview gallery sync
+photoflow backup --dry-run              # Preview backup
 ```
 
 ## Error Handling
@@ -189,6 +192,13 @@ RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
+
+# Homelab backup (rsync)
+HOMELAB_USER = "jkrumm"
+HOMELAB_HOST = "homelab.jkrumm.com"
+HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
+RSYNC_SSH = "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```
