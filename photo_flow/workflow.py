@@ -3,6 +3,7 @@ Workflow management for the Photo-Flow application.
 
 This module provides the main workflow logic for the application.
 """
+import logging
 import os
 import shutil
 import tempfile
@@ -15,6 +16,9 @@ from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, 
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
+from photo_flow.console_utils import console, create_progress, show_status, info
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -639,14 +643,14 @@ class PhotoWorkflow:
         existing_gallery_images = scan_for_images(gallery_images_path, '.JPG') if gallery_images_path.exists() else []
         existing_gallery_image_names = {img.name for img in existing_gallery_images}
 
-        print(f"Existing gallery images: {len(existing_gallery_images)}")
-        print(f"Existing gallery image names: {existing_gallery_image_names}")
+        logger.debug(f"Existing gallery images: {len(existing_gallery_images)}")
+        logger.debug(f"Existing gallery image names: {existing_gallery_image_names}")
 
         # Determine which images to copy to gallery
         high_rated_image_names = {img[0].name for img in high_rated_images}
 
-        print(f"High-rated images: {len(high_rated_images)}")
-        print(f"High-rated image names: {high_rated_image_names}")
+        logger.debug(f"High-rated images: {len(high_rated_images)}")
+        logger.debug(f"High-rated image names: {high_rated_image_names}")
 
         # Images to remove (in gallery but no longer high-rated)
         images_to_remove = [img for img in existing_gallery_images if img.name not in high_rated_image_names]
@@ -654,8 +658,8 @@ class PhotoWorkflow:
         # Images to copy (high-rated but not in gallery)
         images_to_copy = [img[0] for img in high_rated_images if img[0].name not in existing_gallery_image_names]
 
-        print(f"Images to remove: {len(images_to_remove)}")
-        print(f"Images to copy: {len(images_to_copy)}")
+        logger.debug(f"Images to remove: {len(images_to_remove)}")
+        logger.debug(f"Images to copy: {len(images_to_copy)}")
 
         if progress_callback:
             progress_callback(f"Images to copy: {len(images_to_copy)}, Images to remove: {len(images_to_remove)}")
@@ -671,7 +675,7 @@ class PhotoWorkflow:
                     stats['removed'] += 1
                 except Exception as e:
                     error_msg = f"Error removing {img_path}: {e}"
-                    print(error_msg)
+                    logger.error(error_msg)
                     if progress_callback:
                         progress_callback(f"ERROR: {error_msg}")
                     stats['errors'] += 1
@@ -728,13 +732,13 @@ class PhotoWorkflow:
                         stats['synced'] += 1
                     else:
                         error_msg = f"Error updating {src_path.name}: {error}"
-                        print(error_msg)
+                        logger.error(error_msg)
                         if progress_callback:
                             progress_callback(f"ERROR: {error_msg}")
                         stats['errors'] += 1
                 except Exception as e:
                     error_msg = f"Error updating {src_path.name}: {e}"
-                    print(error_msg)
+                    logger.error(error_msg)
                     if progress_callback:
                         progress_callback(f"ERROR: {error_msg}")
                     stats['errors'] += 1
@@ -831,9 +835,9 @@ class PhotoWorkflow:
                 stdout_msg = f"Command output: {e.stdout}"
                 stderr_msg = f"Command error: {e.stderr}"
 
-                print(error_msg)
-                print(stdout_msg)
-                print(stderr_msg)
+                logger.error(error_msg)
+                logger.error(stdout_msg)
+                logger.error(stderr_msg)
 
                 stats['errors'] += 1
                 stats['build_successful'] = False

@@ -5,8 +5,17 @@ This module provides the CLI commands for the application.
 """
 
 import click
+import logging
 
 from photo_flow.workflow import PhotoWorkflow
+from photo_flow.console_utils import console, success, error, info, print_summary
+from rich.table import Table
+
+# Configure logging to be silent except for errors
+logging.basicConfig(
+    level=logging.ERROR,  # Only show errors, not debug/info
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
 @click.group()
@@ -26,18 +35,35 @@ def status():
     workflow = PhotoWorkflow()
     report = workflow.get_status()
 
-    click.echo("Photo-Flow Status Report")
-    click.echo("======================")
-    click.echo(f"Camera connected: {report.camera_connected}")
-    click.echo(f"SSD connected: {report.ssd_connected}")
+    console.print("\n[bold]Photo-Flow Status Report[/bold]\n")
+
+    # Create status table
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Component", style="dim")
+    table.add_column("Status")
+
+    # Add connection status
+    camera_status = "[green]✓ Connected[/green]" if report.camera_connected else "[red]✗ Not Connected[/red]"
+    ssd_status = "[green]✓ Connected[/green]" if report.ssd_connected else "[red]✗ Not Connected[/red]"
+
+    table.add_row("Camera", camera_status)
+    table.add_row("External SSD", ssd_status)
+
+    console.print(table)
 
     if report.camera_connected:
-        click.echo("\nPending files on camera:")
-        click.echo(f"  Videos (.MOV): {report.pending_videos}")
-        click.echo(f"  Photos (.JPG): {report.pending_photos}")
-        click.echo(f"  RAW files (.RAF): {report.pending_raws}")
+        console.print("\n[bold]Pending files on camera:[/bold]")
+        pending_table = Table(show_header=False)
+        pending_table.add_column("Type", style="dim")
+        pending_table.add_column("Count", justify="right", style="cyan")
 
-    click.echo(f"\nStaging status: {report.staging_files} files ready for review")
+        pending_table.add_row("Videos (.MOV)", str(report.pending_videos))
+        pending_table.add_row("Photos (.JPG)", str(report.pending_photos))
+        pending_table.add_row("RAW files (.RAF)", str(report.pending_raws))
+
+        console.print(pending_table)
+
+    console.print(f"\n[bold]Staging status:[/bold] [cyan]{report.staging_files}[/cyan] files ready for review\n")
 
 
 @photoflow.command(name='import')
@@ -47,31 +73,35 @@ def import_cmd(dry_run):
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating import (no files will be copied)")
+        info("[yellow]DRY RUN:[/yellow] Simulating import (no files will be copied)")
 
-    # Define progress callback function
+    # Define progress callback function using Rich console
     def progress_callback(message):
-        # For error messages, print with newline and in red
         if message.startswith("ERROR:"):
-            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+            error(message.replace("ERROR: ", ""))
         else:
-            # Clear the current line and print the progress message
-            click.echo(f"\r\033[K{message}", nl=False)
+            # Use console.print with overwrite for progress updates
+            console.print(f"\r{message}", end="")
 
     # Call import_from_camera with progress callback
     stats = workflow.import_from_camera(dry_run=dry_run, progress_callback=progress_callback)
 
-    # Print a newline to ensure results start on a new line
-    click.echo("\n")
+    # Print newline after progress
+    console.print()
 
-    click.echo("Import Results:")
-    click.echo(f"  Videos copied to SSD: {stats['videos']}")
-    click.echo(f"  Photos copied to Staging: {stats['photos']}")
-    click.echo(f"  RAW files backed up: {stats['raws']}")
-    click.echo(f"  Files skipped (already exist): {stats['skipped']}")
+    # Print summary
+    if stats['errors'] == 0:
+        success("Import completed successfully!")
+    else:
+        error(f"Import completed with {stats['errors']} errors")
 
-    if stats['errors'] > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
+    print_summary("Import Results", {
+        "Videos copied to SSD": stats['videos'],
+        "Photos copied to Staging": stats['photos'],
+        "RAW files backed up": stats['raws'],
+        "Files skipped (already exist)": stats['skipped'],
+        **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
+    })
 
 
 @photoflow.command()
@@ -81,34 +111,37 @@ def finalize(dry_run):
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating finalization (no files will be moved, copied, or deleted)")
+        info("[yellow]DRY RUN:[/yellow] Simulating finalization (no files will be moved, copied, or deleted)")
 
-    # Define progress callback function
+    # Define progress callback function using Rich console
     def progress_callback(message):
-        # For error messages, print with newline and in red
         if message.startswith("ERROR:"):
-            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+            error(message.replace("ERROR: ", ""))
         else:
-            # Clear the current line and print the progress message
-            click.echo(f"\r\033[K{message}", nl=False)
+            console.print(f"\r{message}", end="")
 
     # Call finalize_staging with progress callback
     stats = workflow.finalize_staging(dry_run=dry_run, progress_callback=progress_callback)
 
-    # Print a newline to ensure results start on a new line
-    click.echo("\n")
+    # Print newline after progress
+    console.print()
 
-    click.echo("Finalization Results:")
-    click.echo(f"  Files moved to Final folder: {stats['moved']}")
-    click.echo(f"  Files compressed (5200×3467, Q92, 4:4:4): {stats.get('compressed', 0)}")
-    click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
-    click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")
-    click.echo(f"  Orphaned RAW files deleted: {stats['deleted_raws']}")
-    click.echo(f"  RAW files deleted from camera: {stats['deleted_camera_raws']}")
-    click.echo(f"  Files skipped (already exist): {stats['skipped']}")
+    # Print summary
+    if stats['errors'] == 0:
+        success("Finalization completed successfully!")
+    else:
+        error(f"Finalization completed with {stats['errors']} errors")
 
-    if stats['errors'] > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
+    print_summary("Finalization Results", {
+        "Files moved to Final folder": stats['moved'],
+        "Files compressed (5200×3467, Q92, 4:4:4)": stats.get('compressed', 0),
+        "Files copied back to camera": stats['copied_to_camera'],
+        "Orphaned RAW files found": stats['orphaned_raws'],
+        "Orphaned RAW files deleted": stats['deleted_raws'],
+        "RAW files deleted from camera": stats['deleted_camera_raws'],
+        "Files skipped (already exist)": stats['skipped'],
+        **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
+    })
 
 
 @photoflow.command()
@@ -118,40 +151,47 @@ def sync_gallery(dry_run):
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating gallery sync (no files will be copied or removed)")
+        info("[yellow]DRY RUN:[/yellow] Simulating gallery sync (no files will be copied or removed)")
 
-    # Define progress callback function
+    # Define progress callback function using Rich console
     def progress_callback(message):
-        # For error messages, print with newline and in red
         if message.startswith("ERROR:"):
-            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+            error(message.replace("ERROR: ", ""))
         else:
-            # Clear the current line and print the progress message
-            click.echo(f"\r\033[K{message}", nl=False)
+            console.print(f"\r{message}", end="")
 
     # Call sync_gallery with progress callback
     stats = workflow.sync_gallery(dry_run=dry_run, progress_callback=progress_callback)
 
-    # Print a newline to ensure results start on a new line
-    click.echo("\n")
+    # Print newline after progress
+    console.print()
 
-    click.echo("Gallery Sync Results:")
-    click.echo(f"  Images synced to gallery: {stats['synced']}")
-    click.echo(f"  Images unchanged (already up-to-date): {stats.get('unchanged', 0)}")
-    click.echo(f"  Images removed from gallery: {stats['removed']}")
-    click.echo(f"  Metadata JSON updated: {'Yes' if stats['json_updated'] else 'No'}")
-    click.echo(f"  Total images in gallery: {stats['total_in_gallery']}")
+    # Print summary
+    if stats['errors'] == 0:
+        success("Gallery sync completed successfully!")
+    else:
+        error(f"Gallery sync completed with {stats['errors']} errors")
 
-    # Display build and sync status if available
+    results = {
+        "Images synced to gallery": stats['synced'],
+        "Images unchanged (already up-to-date)": stats.get('unchanged', 0),
+        "Images removed from gallery": stats['removed'],
+        "Metadata JSON updated": "Yes" if stats['json_updated'] else "No",
+        "Total images in gallery": stats['total_in_gallery']
+    }
+
+    # Add build and sync status
     if 'build_successful' in stats:
         if not dry_run:
-            click.echo(f"  Gallery build: {'Successful' if stats['build_successful'] else 'Failed'}")
-            click.echo(f"  Remote sync: {'Successful' if stats['sync_successful'] else 'Failed'}")
+            results["Gallery build"] = "Successful" if stats['build_successful'] else "Failed"
+            results["Remote sync"] = "Successful" if stats['sync_successful'] else "Failed"
         else:
-            click.echo("  Gallery build and remote sync: Would be performed (dry run)")
+            results["Gallery build and remote sync"] = "Would be performed (dry run)"
 
     if stats['errors'] > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
+        results["Errors encountered"] = stats['errors']
+
+    print_summary("Gallery Sync Results", results)
 
 
 @photoflow.command()
@@ -161,47 +201,49 @@ def cleanup(dry_run):
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating RAW cleanup (no files will be deleted)")
+        info("[yellow]DRY RUN:[/yellow] Simulating RAW cleanup (no files will be deleted)")
 
-    # Define progress callback function
+    # Define progress callback function using Rich console
     def progress_callback(message):
-        # For error messages, print with newline and in red
         if message.startswith("ERROR:"):
-            click.echo(f"\n\033[91m{message}\033[0m")  # Red color for errors
+            error(message.replace("ERROR: ", ""))
         else:
-            # Clear the current line and print the progress message
-            click.echo(f"\r\033[K{message}", nl=False)
+            console.print(f"\r{message}", end="")
 
     # Always preview first to show what would be deleted
     preview_stats = workflow.cleanup_unused_raws(dry_run=True, progress_callback=progress_callback)
 
-    # Print a newline to ensure results start on a new line
-    click.echo("\n")
+    # Print newline after progress
+    console.print()
 
-    click.echo("RAW Cleanup Preview:")
-    click.echo(f"  Orphaned RAW files found: {preview_stats['orphaned']}")
+    console.print("[bold]RAW Cleanup Preview:[/bold]")
+    console.print(f"  Orphaned RAW files found: [cyan]{preview_stats['orphaned']}[/cyan]")
 
     if dry_run or preview_stats['orphaned'] == 0:
         if preview_stats['orphaned'] == 0:
-            click.echo("  Nothing to delete.")
+            info("Nothing to delete.")
         return
 
     # Ask for confirmation before deleting
     if not click.confirm(f"Delete {preview_stats['orphaned']} orphaned RAW files?", default=False):
-        click.echo("Aborted. No files were deleted.")
+        console.print("[yellow]Aborted.[/yellow] No files were deleted.")
         return
 
     # Perform deletion
     stats = workflow.cleanup_unused_raws(dry_run=False, progress_callback=progress_callback)
 
-    # Print a newline to ensure results start on a new line
-    click.echo("\n")
+    # Print newline after progress
+    console.print()
 
-    click.echo("RAW Cleanup Results:")
-    click.echo(f"  Orphaned RAW files deleted: {stats['deleted']}")
+    if stats['errors'] == 0:
+        success("RAW cleanup completed successfully!")
+    else:
+        error(f"RAW cleanup completed with {stats['errors']} errors")
 
-    if stats['errors'] > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
+    print_summary("RAW Cleanup Results", {
+        "Orphaned RAW files deleted": stats['deleted'],
+        **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
+    })
 
 
 @photoflow.command(name='backup')
@@ -211,28 +253,42 @@ def backup(dry_run):
     workflow = PhotoWorkflow()
 
     if dry_run:
-        click.echo("DRY RUN: Simulating backup to homelab (no remote changes)")
+        info("[yellow]DRY RUN:[/yellow] Simulating backup to homelab (no remote changes)")
 
+    # Define progress callback function using Rich console
     def progress_callback(message):
         if message.startswith("ERROR:"):
-            click.echo(f"\n\033[91m{message}\033[0m")
+            error(message.replace("ERROR: ", ""))
         else:
-            click.echo(f"\r\033[K{message}", nl=False)
+            console.print(f"\r{message}", end="")
 
     stats = workflow.backup_final_to_homelab(dry_run=dry_run, progress_callback=progress_callback)
 
-    click.echo("\n")
-    click.echo("Backup Results:")
-    click.echo(f"  Files scanned in Final: {stats.get('scanned', 0)}")
+    # Print newline after progress
+    console.print()
+
+    # Print summary
+    if stats.get('sync_successful'):
+        success("Backup completed successfully!")
+    elif stats.get('errors', 0) > 0:
+        error(f"Backup failed with {stats['errors']} errors")
+
+    results = {
+        "Files scanned in Final": stats.get('scanned', 0)
+    }
+
     if not dry_run:
-        click.echo(f"  Backup successful: {'Yes' if stats.get('sync_successful') else 'No'}")
+        results["Backup successful"] = "Yes" if stats.get('sync_successful') else "No"
         if stats.get('connection_method'):
             method_desc = "direct IPv6" if stats['connection_method'] == "direct" else "ProxyJump via VPS (IPv4)"
-            click.echo(f"  Connection method: {method_desc}")
+            results["Connection method"] = method_desc
     else:
-        click.echo("  Backup would be performed (dry run)")
+        results["Backup status"] = "Would be performed (dry run)"
+
     if stats.get('errors', 0) > 0:
-        click.echo(f"  Errors encountered: {stats['errors']}")
+        results["Errors encountered"] = stats['errors']
+
+    print_summary("Backup Results", results)
 
 
 if __name__ == '__main__':

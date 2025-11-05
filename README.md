@@ -1,6 +1,8 @@
 # Photo-Flow
 
-A CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow for JPG photography with RAW backups, plus an optional gallery sync for high-rated images.
+A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow for JPG photography with RAW backups, plus an optional gallery sync for high-rated images.
+
+> **Note**: This is a personal tool designed for local use on a single developer's machine, not production software intended for distribution or multi-user environments.
 
 ## Features
 
@@ -15,6 +17,7 @@ A CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow f
 - **Safety-first architecture**: copy-first approach, atomic operations, automatic backups
 - **Complete metadata preservation**: All EXIF, IPTC, XMP data preserved during compression
 - **Smart connectivity**: Automatic IPv4/IPv6 fallback for backups when traveling
+- **Beautiful CLI output**: Rich-formatted terminal output with color-coded status, progress indicators, and structured summaries
 - Case-insensitive handling for .JPG/.RAF
 
 ## Quick Start
@@ -46,10 +49,12 @@ That's it! No virtual environments to activate, works from any directory. ✨
 
 ### `photoflow status`
 Check the current status of your workflow:
-- Camera connection status
-- SSD connection status
-- Pending files on camera (excluding JPGs already in Final)
+- Camera connection status (color-coded: green ✓ / red ✗)
+- SSD connection status (color-coded: green ✓ / red ✗)
+- Pending files on camera (displayed in formatted table)
 - Files in staging area
+
+**Output**: Rich-formatted tables with color-coded status indicators
 
 ### `photoflow import`
 Import files from your camera:
@@ -64,6 +69,8 @@ Add `--dry-run` to preview without copying files.
 photoflow import --dry-run
 photoflow import
 ```
+
+**Output**: Progress updates, success/error indicators (✓/✗), and structured summary
 
 ### `photoflow finalize`
 Move and compress approved photos from staging to final folder:
@@ -82,6 +89,8 @@ Add `--dry-run` to preview without moving files.
 photoflow finalize --dry-run
 photoflow finalize
 ```
+
+**Output**: Progress updates for compression, success indicators, detailed summary
 
 ### `photoflow cleanup`
 Remove unused RAW files that don’t have corresponding JPGs in the Final folder.
@@ -151,6 +160,36 @@ RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```
+
+## Output Examples
+
+The tool provides beautiful, color-coded terminal output:
+
+```
+Photo-Flow Status Report
+
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ Component    ┃ Status          ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ Camera       │ ✓ Connected     │
+│ External SSD │ ✓ Connected     │
+└──────────────┴─────────────────┘
+
+Pending files on camera:
+┌────────────────────┬───────┐
+│ Videos (.MOV)      │    45 │
+│ Photos (.JPG)      │   120 │
+│ RAW files (.RAF)   │   120 │
+└────────────────────┴───────┘
+
+Staging status: 12 files ready for review
+```
+
+All commands provide:
+- ✓ **Success indicators** in green
+- ✗ **Error indicators** in red
+- **Structured summaries** of results
+- **Progress updates** during long operations
 
 ### Prerequisites
 - **exiftool** for metadata preservation: `brew install exiftool`

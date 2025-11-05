@@ -3,6 +3,8 @@
 ## Project Overview
 Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow for JPG photography with RAW backups, plus a gallery sync for high-rated images.
 
+**Important**: This is a personal tool designed to run only on the developer's local machine, not production software intended for distribution.
+
 **Key Principle**: Safety-first architecture - no data loss tolerance for irreplaceable photos.
 
 ---
@@ -51,6 +53,7 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 ### Technology Stack
 - **Python 3.9+** with venv/pipx
 - **Click 8.1.8+** - CLI framework
+- **Rich 13.7.0+** - Terminal output and formatting
 - **Pillow 11.2.1+** - Image processing
 - **piexif 1.1.3+** - EXIF read/write
 - **defusedxml 0.7.1+** - Secure XML parsing
@@ -288,12 +291,10 @@ StatusReport:
 7. **Build**: `npm run build` in photo_gallery/ (uses .nvmrc Node version)
 8. **Sync**: rsync dist/ to remote server
 
-**⚠️ Debug Code Present (workflow.py:603-619):**
-- Lines contain `print()` statements for debugging
-- Should be removed or converted to `logging.debug()`
+**Logging**: Uses Python's `logging` module with `logger.debug()` for debug output and `logger.error()` for errors
 
 **Remote Destination (HARDCODED - NOT in config.py):**
-- Location: workflow.py:683
+- Location: workflow.py:~815
 - Value: `jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery`
 - TODO: Move to config.py
 
@@ -335,7 +336,41 @@ StatusReport:
 
 ---
 
-### 5. CLI Interface (`cli.py`)
+### 5. Console Utilities (`console_utils.py`)
+
+**Purpose**: Centralized Rich console helpers for consistent terminal output
+
+**Functions:**
+```python
+success(message: str) -> None
+  # Green checkmark + message
+
+error(message: str) -> None
+  # Red X + message
+
+warning(message: str) -> None
+  # Yellow ! + message
+
+info(message: str) -> None
+  # Plain message
+
+show_status(message: str, spinner: str = "dots")
+  # Context manager for status spinner
+
+create_progress() -> Progress
+  # Rich Progress instance with standard columns
+
+print_summary(title: str, stats: dict) -> None
+  # Formatted summary of operation results
+```
+
+**Console Instance**: Single `console` object used throughout app for output
+
+**Logging Configuration**: Python logging set to ERROR level (silences debug/info)
+
+---
+
+### 6. CLI Interface (`cli.py`)
 
 **Command Group:**
 ```python
@@ -345,21 +380,21 @@ def photoflow()
 
 **Commands:**
 
-| Command | Flag | Description | Returns |
-|---------|------|-------------|---------|
-| `photoflow status` | - | Check workflow status | StatusReport display |
-| `photoflow import` | `--dry-run` | Import from camera | Videos/photos/RAWs count |
-| `photoflow finalize` | `--dry-run` | Staging → Final → Camera → Cleanup | Moved/compressed/copied counts |
-| `photoflow cleanup` | `--dry-run` | Delete orphaned RAWs | Orphaned/deleted counts |
-| `photoflow sync-gallery` | `--dry-run` | High-rated photos to gallery | Synced/removed/build status |
-| `photoflow backup` | `--dry-run` | Backup Final to homelab | Sync status/connection method |
+| Command | Flag | Description | Output Style |
+|---------|------|-------------|--------------|
+| `photoflow status` | - | Check workflow status | Rich tables with color-coded status |
+| `photoflow import` | `--dry-run` | Import from camera | Progress updates + success/error + summary |
+| `photoflow finalize` | `--dry-run` | Staging → Final → Camera → Cleanup | Progress updates + summary |
+| `photoflow cleanup` | `--dry-run` | Delete orphaned RAWs | Preview + confirmation + summary |
+| `photoflow sync-gallery` | `--dry-run` | High-rated photos to gallery | Progress updates + build/sync status + summary |
+| `photoflow backup` | `--dry-run` | Backup Final to homelab | Status updates + connection method + summary |
 
-**Progress Callback Signature:**
-```python
-def progress_callback(message: str) -> None:
-    # Called with status updates during operations
-    # Example: "Processing 15/100: DSCF0430.JPG"
-```
+**Output Features:**
+- Rich-formatted progress messages (all operations)
+- Color-coded success (green ✓) / error (red ✗) messages
+- Structured summaries using `print_summary()`
+- Rich tables for status display
+- Consistent styling throughout
 
 ---
 
@@ -498,28 +533,44 @@ def progress_callback(message: str) -> None:
 
 ## Code Quality Standards
 
-### Logging (⚠️ Current Issue)
+### Output & Logging System
 
-**Problem**: Debug print() statements in production code
-**Location**: workflow.py:603-619
-**Example**:
+**Architecture**: Hybrid Rich + Python logging approach
+
+**Rich Console** (User-Facing Output):
+- **Location**: `console_utils.py`
+- **Purpose**: All user-visible output
+- **Usage**:
 ```python
-print(f"Existing gallery images: {len(existing_gallery_images)}")  # Line 603
-print(f"High-rated images: {len(high_rated_images)}")              # Line 609
+from photo_flow.console_utils import console, success, error, info
+
+info("Processing files...")
+success("Operation completed successfully!")
+error("Failed to process file")
+console.print("[cyan]Status update[/cyan]")
 ```
 
-**Required Fix**:
-❌ Don't: Use `print()` for debugging
-✅ Do: Use Python's `logging` module
-
-**Implementation**:
+**Python Logging** (Debug/Error Tracking):
+- **Location**: workflow.py, other modules
+- **Configuration**: cli.py sets level to ERROR (silences debug/info)
+- **Usage**:
 ```python
 import logging
 logger = logging.getLogger(__name__)
 
-# Replace print() with:
+# Debug (silent unless logging reconfigured):
 logger.debug(f"Existing gallery images: {len(existing_gallery_images)}")
+
+# Error (always shown):
+logger.error(f"Error during build or sync: {e}")
 ```
+
+**Standard**:
+- ✅ Do: Use Rich console functions for all user output
+- ✅ Do: Use `logger.debug()` for diagnostic info (normally hidden)
+- ✅ Do: Use `logger.error()` for error tracking
+- ❌ Don't: Use `print()` for any output
+- ❌ Don't: Use click.echo() (use Rich instead)
 
 ### Type Hints
 
@@ -647,7 +698,7 @@ photoflow backup --dry-run
 - [ ] Cleanup in finally blocks
 
 **3. Check code quality:**
-- [ ] No print() statements (use logging)
+- [ ] Use logging module instead of print() statements
 - [ ] Type hints on all parameters
 - [ ] Docstrings on all functions
 - [ ] Return types documented
@@ -768,6 +819,7 @@ State 5: BACKED UP
 ### Python Dependencies (requirements.txt / setup.py)
 ```
 Click>=8.1.8          # CLI framework
+Rich>=13.7.0          # Terminal output and formatting
 Pillow>=11.2.1        # Image processing
 piexif>=1.1.3         # EXIF metadata
 defusedxml>=0.7.1     # Secure XML parsing
@@ -814,25 +866,25 @@ pipx uninstall photo-flow
 
 ## Known Limitations
 
-1. **Hardcoded gallery remote**: workflow.py:683 should move to config.py
-2. **Debug print statements**: workflow.py:603-619 should use logging
-3. **Single camera support**: Hardcoded to Fuji X-T4 volume name
-4. **No progress persistence**: Interrupted operations start from beginning
-5. **No undo mechanism**: Operations are permanent (dry-run recommended)
-6. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicates)
+1. **Hardcoded gallery remote**: workflow.py:~815 (should move to config.py for consistency)
+2. **Single camera support**: Hardcoded to Fuji X-T4 volume name
+3. **No progress persistence**: Interrupted operations start from beginning
+4. **No undo mechanism**: Operations are permanent (dry-run recommended)
+5. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicate detection)
+6. **Personal tool**: Designed for single-user local execution, not production deployment
 
 ---
 
 ## Future Improvements (Optional)
 
 1. Move gallery remote destination to config.py
-2. Replace print() with logging module
-3. Add progress persistence for resumable operations
-4. Support multiple camera models (configurable volume names)
-5. Add undo/rollback mechanism for operations
-6. Unit tests for safety mechanisms
-7. Integration tests for full workflow
-8. Performance metrics logging
+2. Add progress persistence for resumable operations
+3. Support multiple camera models (configurable volume names)
+4. Add undo/rollback mechanism for operations
+5. Unit tests for safety mechanisms
+6. Integration tests for full workflow
+7. Performance metrics logging
+8. Add --verbose CLI flag for enhanced debugging output
 
 ---
 
