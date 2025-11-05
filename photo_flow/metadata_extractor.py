@@ -96,11 +96,18 @@ class MetadataExtractor:
                 # Check if there's a direct Description object with Rating
                 if 'xmpmeta' in xmp_data and 'RDF' in xmp_data['xmpmeta'] and 'Description' in xmp_data['xmpmeta']['RDF']:
                     description = xmp_data['xmpmeta']['RDF']['Description']
-                    if 'Rating' in description:
-                        try:
-                            rating = int(description['Rating'])
-                        except (ValueError, TypeError):
-                            rating = 0
+
+                    # Description can be either a dict or a list of dicts
+                    descriptions_to_check = [description] if isinstance(description, dict) else description
+
+                    # Search through all description blocks for Rating
+                    for desc_block in descriptions_to_check:
+                        if isinstance(desc_block, dict) and 'Rating' in desc_block:
+                            try:
+                                rating = int(desc_block['Rating'])
+                                break
+                            except (ValueError, TypeError):
+                                continue
 
                 # If not found, try the old method with different namespaces
                 if rating is None:
@@ -118,22 +125,30 @@ class MetadataExtractor:
                 # Extract title and description from the Description object
                 if 'xmpmeta' in xmp_data and 'RDF' in xmp_data['xmpmeta'] and 'Description' in xmp_data['xmpmeta']['RDF']:
                     description = xmp_data['xmpmeta']['RDF']['Description']
-                    
-                    # Extract title
-                    if 'title' in description:
-                        title = description['title']
-                        if isinstance(title, dict) and 'x-default' in title:
-                            metadata["title"] = title['x-default']
-                        else:
-                            metadata["title"] = str(title)
-                    
-                    # Extract description
-                    if 'description' in description:
-                        desc = description['description']
-                        if isinstance(desc, dict) and 'x-default' in desc:
-                            metadata["description"] = desc['x-default']
-                        else:
-                            metadata["description"] = str(desc)
+
+                    # Description can be either a dict or a list of dicts
+                    descriptions_to_check = [description] if isinstance(description, dict) else description
+
+                    # Search through all description blocks for title and description
+                    for desc_block in descriptions_to_check:
+                        if not isinstance(desc_block, dict):
+                            continue
+
+                        # Extract title
+                        if 'title' in desc_block and "title" not in metadata:
+                            title = desc_block['title']
+                            if isinstance(title, dict) and 'x-default' in title:
+                                metadata["title"] = title['x-default']
+                            else:
+                                metadata["title"] = str(title)
+
+                        # Extract description
+                        if 'description' in desc_block and "description" not in metadata:
+                            desc = desc_block['description']
+                            if isinstance(desc, dict) and 'x-default' in desc:
+                                metadata["description"] = desc['x-default']
+                            else:
+                                metadata["description"] = str(desc)
 
             # If title/description not found in Description, try the old method
             if "title" not in metadata or "description" not in metadata:

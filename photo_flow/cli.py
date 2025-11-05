@@ -75,19 +75,8 @@ def import_cmd(dry_run):
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating import (no files will be copied)")
 
-    # Define progress callback function using Rich console
-    def progress_callback(message):
-        if message.startswith("ERROR:"):
-            error(message.replace("ERROR: ", ""))
-        else:
-            # Use console.print with overwrite for progress updates
-            console.print(f"\r{message}", end="")
-
-    # Call import_from_camera with progress callback
-    stats = workflow.import_from_camera(dry_run=dry_run, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Call import_from_camera (uses Rich Progress internally)
+    stats = workflow.import_from_camera(dry_run=dry_run)
 
     # Print summary
     if stats['errors'] == 0:
@@ -113,18 +102,8 @@ def finalize(dry_run):
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating finalization (no files will be moved, copied, or deleted)")
 
-    # Define progress callback function using Rich console
-    def progress_callback(message):
-        if message.startswith("ERROR:"):
-            error(message.replace("ERROR: ", ""))
-        else:
-            console.print(f"\r{message}", end="")
-
-    # Call finalize_staging with progress callback
-    stats = workflow.finalize_staging(dry_run=dry_run, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Call finalize_staging (uses Rich Progress internally)
+    stats = workflow.finalize_staging(dry_run=dry_run)
 
     # Print summary
     if stats['errors'] == 0:
@@ -153,18 +132,8 @@ def sync_gallery(dry_run):
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating gallery sync (no files will be copied or removed)")
 
-    # Define progress callback function using Rich console
-    def progress_callback(message):
-        if message.startswith("ERROR:"):
-            error(message.replace("ERROR: ", ""))
-        else:
-            console.print(f"\r{message}", end="")
-
-    # Call sync_gallery with progress callback
-    stats = workflow.sync_gallery(dry_run=dry_run, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Use Rich Progress directly instead of verbose callbacks
+    stats = workflow.sync_gallery(dry_run=dry_run, progress_callback=None)
 
     # Print summary
     if stats['errors'] == 0:
@@ -203,18 +172,8 @@ def cleanup(dry_run):
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating RAW cleanup (no files will be deleted)")
 
-    # Define progress callback function using Rich console
-    def progress_callback(message):
-        if message.startswith("ERROR:"):
-            error(message.replace("ERROR: ", ""))
-        else:
-            console.print(f"\r{message}", end="")
-
-    # Always preview first to show what would be deleted
-    preview_stats = workflow.cleanup_unused_raws(dry_run=True, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Always preview first to show what would be deleted (uses Rich Progress internally)
+    preview_stats = workflow.cleanup_unused_raws(dry_run=True)
 
     console.print("[bold]RAW Cleanup Preview:[/bold]")
     console.print(f"  Orphaned RAW files found: [cyan]{preview_stats['orphaned']}[/cyan]")
@@ -229,11 +188,8 @@ def cleanup(dry_run):
         console.print("[yellow]Aborted.[/yellow] No files were deleted.")
         return
 
-    # Perform deletion
-    stats = workflow.cleanup_unused_raws(dry_run=False, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Perform deletion (uses Rich Progress internally)
+    stats = workflow.cleanup_unused_raws(dry_run=False)
 
     if stats['errors'] == 0:
         success("RAW cleanup completed successfully!")
@@ -255,17 +211,8 @@ def backup(dry_run):
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating backup to homelab (no remote changes)")
 
-    # Define progress callback function using Rich console
-    def progress_callback(message):
-        if message.startswith("ERROR:"):
-            error(message.replace("ERROR: ", ""))
-        else:
-            console.print(f"\r{message}", end="")
-
-    stats = workflow.backup_final_to_homelab(dry_run=dry_run, progress_callback=progress_callback)
-
-    # Print newline after progress
-    console.print()
+    # Call backup_final_to_homelab (uses Rich console internally, rsync output flows through)
+    stats = workflow.backup_final_to_homelab(dry_run=dry_run)
 
     # Print summary
     if stats.get('sync_successful'):

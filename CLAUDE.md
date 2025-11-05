@@ -171,7 +171,9 @@ class MetadataExtractor:
 | **GPS** | latitude, longitude (decimal degrees) | None, None |
 
 **XMP Rating Extraction:**
+- **Critical fix**: Handles XMP Description as both dict AND list of dicts (Pillow returns either format)
 - Searches multiple namespaces: `xmp`, `photoshop`, Adobe RDF structures
+- Iterates through all Description blocks to find Rating, title, description fields
 - Rating range: 0-5 (integer)
 - Default if missing: 0
 - Used by: Gallery sync filter (rating ≥ 4)
@@ -218,7 +220,7 @@ StatusReport:
    - JPG → STAGING_PATH (keep original on camera)
    - RAF → RAWS_PATH (keep original on camera)
 4. Duplicate detection: Skip if hash matches destination
-5. Progress callback: Percentage completion
+5. **Output**: Rich Progress bar with file count and completion percentage
 
 **Returns:**
 ```python
@@ -232,15 +234,19 @@ StatusReport:
 ```
 
 #### `finalize_staging(dry_run=False, progress_callback=None) -> Dict[str, int]`
-**Process (5 steps):**
+**Process (4 steps with separate Rich Progress bars):**
 1. **Atomic Compress+Move**: For each Staging JPG (one at a time):
    - Compress to temp file (5200×3467, quality 92, 4:4:4 chroma, preserve metadata)
    - Copy temp → Final (safe_copy with hash verify)
    - Delete from Staging (only if copy succeeded)
    - **Interrupt-safe**: Remaining files stay in Staging, retry processes them
+   - **Output**: Progress bar for compression/move operations
 2. **Copy to camera**: Compressed JPGs → first available DCIM subfolder
+   - **Output**: Progress bar for camera copy operations
 3. **Delete camera RAWs**: Matching RAFs for finalized JPGs
+   - **Output**: Info messages for each deletion
 4. **Cleanup orphaned RAWs**: Local RAFs without matching Final JPG
+   - **Output**: Info messages for cleanup operations
 
 **Returns:**
 ```python
@@ -264,6 +270,7 @@ StatusReport:
 4. **Always preview first** (shows list)
 5. **Confirmation required** (unless dry-run)
 6. Delete orphaned RAWs
+   - **Output**: Rich Progress bar for deletion operations
 
 **Returns:**
 ```python
@@ -282,15 +289,19 @@ StatusReport:
 - Staging count: Files waiting for finalization
 
 #### `sync_gallery(dry_run=False, progress_callback=None) -> Dict[str, int]`
-**Process (8 steps):**
+**Process (8 steps with Rich output):**
 1. Scan Final folder for all JPGs
 2. Extract metadata for each image
+   - **Output**: Rich Progress bar for metadata extraction
 3. **Filter**: rating ≥ 4 only
 4. Copy high-rated images to `GALLERY_PATH/images/` (skip if unchanged by hash)
+   - **Output**: Rich Progress bar for file operations
 5. Remove gallery images no longer rated 4+
 6. Generate `metadata.json` with high-rated images only
 7. **Build**: `npm run build` in photo_gallery/ (uses .nvmrc Node version)
+   - **Output**: Rich status spinner during build
 8. **Sync**: rsync dist/ to remote server
+   - **Output**: Rich status spinner during sync
 
 **Logging**: Uses Python's `logging` module with `logger.debug()` for debug output and `logger.error()` for errors
 
@@ -316,11 +327,16 @@ StatusReport:
 
 #### `backup_final_to_homelab(dry_run=False, progress_callback=None) -> Dict[str, int]`
 **Process (IPv4/IPv6 Automatic Fallback):**
-1. **Try direct SSH**: IPv6 connection (timeout: 5s)
-2. **Fallback to ProxyJump**: IPv4 via VPS if direct fails
-3. Rsync flags: `-av --delete --partial --whole-file --progress`
-4. **Exclusions**: Filters out system files (`.DS_Store`, `._*`, `Thumbs.db`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`)
-5. SSH cipher: `aes128-gcm@openssh.com` (fast, no compression)
+1. **Safety check**: Verify Final folder has sufficient files (prevents accidental wipe)
+   - **Output**: Warning messages if folder appears empty/unmounted
+2. **Try direct SSH**: IPv6 connection (timeout: 5s)
+   - **Output**: Info message about connection attempt
+3. **Fallback to ProxyJump**: IPv4 via VPS if direct fails
+   - **Output**: Warning + info about fallback
+4. Rsync flags: `-av --delete --partial --whole-file --progress`
+5. **Exclusions**: Filters out system files (`.DS_Store`, `._*`, `Thumbs.db`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`)
+6. SSH cipher: `aes128-gcm@openssh.com` (fast, no compression)
+   - **Output**: Rsync's own progress output flows to terminal + success/error messages
 
 **SSH Configurations:**
 - Direct: `ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5`
@@ -392,11 +408,12 @@ def photoflow()
 | `photoflow backup` | `--dry-run` | Backup Final to homelab | Status updates + connection method + summary |
 
 **Output Features:**
-- Rich-formatted progress messages (all operations)
-- Color-coded success (green ✓) / error (red ✗) messages
-- Structured summaries using `print_summary()`
-- Rich tables for status display
-- Consistent styling throughout
+- **Rich Progress bars**: All file operations show real-time progress with completion percentage
+- **Status spinners**: Long-running operations (npm build, rsync) show animated spinners
+- **Color-coded messages**: Success (green ✓), error (red ✗), warning (yellow !), info (plain)
+- **Structured summaries**: All commands end with formatted result tables
+- **Clean output**: Progress updates in-place (no terminal flooding)
+- **Consistent styling**: Uniform Rich formatting throughout all commands
 
 ---
 
@@ -913,6 +930,32 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.1.0
-**Last Updated**: Based on codebase analysis January 2025
+**Version**: 0.2.0
+**Last Updated**: January 2025
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
+
+---
+
+## Recent Changes
+
+### v0.2.0 - Output & UX Improvements (January 2025)
+**Major refactoring of CLI output from verbose callbacks to Rich Progress bars:**
+
+1. **Fixed XMP Rating Bug** (`metadata_extractor.py`):
+   - XMP Description structure can be either dict OR list of dicts
+   - Now iterates through all Description blocks to find Rating/title/description
+   - Fixes issue where all images appeared to have 0 rating
+
+2. **Replaced Verbose Callbacks with Rich Progress** (all commands):
+   - **import**: 60+ verbose lines → 1 clean progress bar
+   - **finalize**: 100+ verbose lines → 4 progress bars (compress, camera copy, RAW cleanup)
+   - **cleanup**: Verbose callbacks → progress bar for deletions
+   - **sync-gallery**: 265+ verbose lines → 2 progress bars + 2 status spinners
+   - **backup**: Verbose callbacks → Rich info/warning/error messages + rsync output
+
+3. **Benefits**:
+   - ✅ Clean terminal output (no flooding)
+   - ✅ Real-time progress with completion percentage
+   - ✅ Consistent Rich formatting across all commands
+   - ✅ Better user experience with spinners for long operations
+   - ✅ No functionality changes - only output improvements

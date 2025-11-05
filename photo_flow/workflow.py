@@ -119,16 +119,14 @@ class PhotoWorkflow:
         Import files from the camera to the appropriate locations.
         Excludes files that are already in the Final folder to avoid re-staging finalized photos.
         """
+        from photo_flow.console_utils import create_progress, info
+
         # Scan camera for files
-        if progress_callback:
-            progress_callback("Scanning camera for files...")
         files = self.file_manager.scan_camera_files()
 
-        # Get finalized files to exclude from staging (keep this pre-filtering!)
+        # Get finalized files to exclude from staging
         final_jpg_bases = set()
         if FINAL_PATH.exists():
-            if progress_callback:
-                progress_callback("Checking for files already in Final folder...")
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
@@ -141,56 +139,103 @@ class PhotoWorkflow:
         skipped_finalized = (len(files.get('.JPG', [])) - len(jpg_files) +
                              len(files.get('.RAF', [])) - len(raf_files))
 
-        # Calculate total files for progress tracking
+        if skipped_finalized > 0:
+            info(f"Skipping {skipped_finalized} files already in Final folder")
+
+        # Process each file type with Rich Progress
         total_files = len(mov_files) + len(jpg_files) + len(raf_files)
-        files_processed = 0
 
-        if progress_callback:
-            progress_callback(f"Found {len(mov_files)} videos, {len(jpg_files)} photos, {len(raf_files)} RAW files")
-            if skipped_finalized > 0:
-                progress_callback(f"Skipping {skipped_finalized} files already in Final folder")
-            if total_files > 0:
-                progress_callback(f"Starting import of {total_files} files (0% complete)")
+        if total_files == 0:
+            info("No new files to import")
+            return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': skipped_finalized, 'errors': 0}
 
-        # Create a wrapper for the progress callback to show overall progress
-        def progress_wrapper(message):
-            nonlocal files_processed
-            if progress_callback:
-                if "Processing" in message and ":" in message:
-                    # Only increment once per file, not per message
-                    if files_processed < total_files:
-                        files_processed += 1
-                        percent = int((files_processed / total_files) * 100)
-                        progress_callback(f"{message} ({percent}% complete)")
+        all_files = []
+        file_destinations = []
+        file_types = []
+        delete_flags = []
+
+        # Prepare all files for batch processing
+        for mov in mov_files:
+            all_files.append(mov)
+            file_destinations.append(SSD_PATH)
+            file_types.append("video")
+            delete_flags.append(True)
+
+        for jpg in jpg_files:
+            all_files.append(jpg)
+            file_destinations.append(STAGING_PATH)
+            file_types.append("photo")
+            delete_flags.append(False)
+
+        for raf in raf_files:
+            all_files.append(raf)
+            file_destinations.append(RAWS_PATH)
+            file_types.append("RAW")
+            delete_flags.append(False)
+
+        mov_count = jpg_count = raf_count = 0
+        mov_skip = jpg_skip = raf_skip = 0
+        errors = 0
+
+        with create_progress() as progress:
+            task = progress.add_task(
+                f"[cyan]Importing {total_files} files from camera",
+                total=total_files
+            )
+
+            for file_path, dest, ftype, should_delete in zip(all_files, file_destinations, file_types, delete_flags):
+                if dry_run:
+                    if ftype == "video":
+                        mov_count += 1
+                    elif ftype == "photo":
+                        jpg_count += 1
+                    else:
+                        raf_count += 1
+                    progress.advance(task)
+                    continue
+
+                dst_path = dest / file_path.name
+
+                # Check for duplicates
+                is_dup, error = self.file_manager.is_duplicate(file_path, dst_path)
+                if error:
+                    errors += 1
+                    progress.advance(task)
+                    continue
+
+                if dst_path.exists() and is_dup:
+                    if ftype == "video":
+                        mov_skip += 1
+                    elif ftype == "photo":
+                        jpg_skip += 1
+                    else:
+                        raf_skip += 1
                 else:
-                    progress_callback(message)
+                    success, error = self.file_manager.safe_copy(file_path, dst_path)
+                    if success:
+                        if ftype == "video":
+                            mov_count += 1
+                        elif ftype == "photo":
+                            jpg_count += 1
+                        else:
+                            raf_count += 1
 
-        # Process each file type
-        if progress_callback and mov_files:
-            progress_callback(f"Processing {len(mov_files)} videos...")
-        mov_stats = self._process_files(mov_files, SSD_PATH, "video",
-                                        progress_wrapper if not dry_run else progress_callback,
-                                        dry_run, delete_original=True)  # Explicitly set delete_original=True
+                        if should_delete:
+                            try:
+                                file_path.unlink()
+                            except Exception as e:
+                                errors += 1
+                    else:
+                        errors += 1
 
-        if progress_callback and jpg_files:
-            progress_callback(f"Processing {len(jpg_files)} photos...")
-        jpg_stats = self._process_files(jpg_files, STAGING_PATH, "photo",
-                                        progress_wrapper if not dry_run else progress_callback, dry_run)
-
-        if progress_callback and raf_files:
-            progress_callback(f"Processing {len(raf_files)} RAW files...")
-        raf_stats = self._process_files(raf_files, RAWS_PATH, "RAW file",
-                                        progress_wrapper if not dry_run else progress_callback, dry_run)
-
-        if progress_callback and not dry_run:
-            progress_callback("Import completed successfully!")
+                progress.advance(task)
 
         return {
-            'videos': mov_stats['processed'],
-            'photos': jpg_stats['processed'],
-            'raws': raf_stats['processed'],
-            'skipped': mov_stats['skipped'] + jpg_stats['skipped'] + raf_stats['skipped'] + skipped_finalized,
-            'errors': mov_stats['errors'] + jpg_stats['errors'] + raf_stats['errors']
+            'videos': mov_count,
+            'photos': jpg_count,
+            'raws': raf_count,
+            'skipped': mov_skip + jpg_skip + raf_skip + skipped_finalized,
+            'errors': errors
         }
 
     def finalize_staging(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
@@ -205,249 +250,168 @@ class PhotoWorkflow:
         Returns:
             Dict[str, int]: Statistics about the finalization operation
         """
+        from photo_flow.console_utils import create_progress, info
+
         stats = {
             'moved': 0,
             'compressed': 0,
             'copied_to_camera': 0,
             'orphaned_raws': 0,
             'deleted_raws': 0,
-            'deleted_camera_raws': 0,  # New field for tracking RAWs deleted from camera
+            'deleted_camera_raws': 0,
             'skipped': 0,
             'errors': 0
         }
 
-        # Scan staging folder for JPG files
-        if progress_callback:
-            progress_callback("Scanning staging folder for photos...")
-
         if not STAGING_PATH.exists():
-            if progress_callback:
-                progress_callback("Staging folder not found. Nothing to finalize.")
+            info("Staging folder not found. Nothing to finalize.")
             return stats
 
         staging_files = scan_for_images(STAGING_PATH, '.JPG')
 
-        if progress_callback:
-            progress_callback(f"Found {len(staging_files)} photos in staging")
+        if len(staging_files) == 0:
+            info("No photos in staging to finalize")
+            return stats
 
         # Create final directory if it doesn't exist
         if not dry_run:
             FINAL_PATH.mkdir(parents=True, exist_ok=True)
 
-        # Calculate total operations for progress tracking
-        total_operations = len(staging_files)
+        # Step 1: Compress and move staging files to Final
+        with create_progress() as progress:
+            task = progress.add_task(
+                f"[cyan]Compressing & moving {len(staging_files)} photos to Final",
+                total=len(staging_files)
+            )
 
-        # Add camera copy operations if camera is connected
-        final_files = []
-        if CAMERA_PATH.exists():
-            final_files = scan_for_images(FINAL_PATH, '.JPG')
-            total_operations += len(final_files)
+            for staging_file in staging_files:
+                final_path = FINAL_PATH / staging_file.name
 
-        # Initialize progress counter
-        operations_completed = 0
-
-        if progress_callback and total_operations > 0:
-            progress_callback(f"Starting finalization of {total_operations} operations (0% complete)")
-
-        # Create a wrapper for the progress callback to show overall progress
-        def progress_wrapper(message):
-            nonlocal operations_completed
-            if progress_callback:
-                if "Processing" in message and ":" in message:
-                    # Only increment if we haven't reached total operations
-                    if operations_completed < total_operations:
-                        operations_completed += 1
-                        percent_complete = int((operations_completed / total_operations) * 100)
-                        progress_callback(f"{message} ({percent_complete}% complete)")
-                    else:
-                        progress_callback(message)
-                else:
-                    progress_callback(message)
-
-        # ATOMIC OPERATION: Compress-then-copy each file individually
-        # This ensures files in Final are ALWAYS compressed, even if interrupted
-        if staging_files and progress_callback:
-            progress_callback(f"Processing {len(staging_files)} photos (compress → Final)...")
-
-        for idx, staging_file in enumerate(staging_files, 1):
-            final_path = FINAL_PATH / staging_file.name
-
-            # Check if file already exists in Final (skip duplicates)
-            if final_path.exists():
-                is_dup, _ = self.file_manager.is_duplicate(staging_file, final_path)
-                if is_dup:
-                    stats['skipped'] += 1
-                    if progress_callback:
-                        progress_callback(f"Skipping {staging_file.name} (already exists in Final)")
-                    continue
-
-            if dry_run:
-                # In dry-run, just report what would happen
-                stats['moved'] += 1
-                stats['compressed'] += 1
-                if progress_callback:
-                    progress_wrapper(f"Processing photo {idx}/{len(staging_files)}: {staging_file.name}")
-            else:
-                # ATOMIC OPERATION FOR EACH FILE:
-                # 1. Compress staging file to temporary file
-                # 2. Copy compressed temp to Final (with hash verification)
-                # 3. Delete from Staging (only if copy succeeded)
-
-                temp_compressed = None
-                try:
-                    # Create temporary file for compressed version
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-                        temp_compressed = Path(tmp.name)
-
-                    # Compress staging file to temp file
-                    compress_success, compress_error = self.image_processor.compress_jpeg_safe(
-                        staging_file,
-                        output_path=temp_compressed
-                    )
-
-                    if not compress_success:
-                        stats['errors'] += 1
-                        if progress_callback:
-                            progress_callback(f"ERROR: Failed to compress {staging_file.name}: {compress_error}")
+                # Check for duplicates
+                if final_path.exists():
+                    is_dup, _ = self.file_manager.is_duplicate(staging_file, final_path)
+                    if is_dup:
+                        stats['skipped'] += 1
+                        progress.advance(task)
                         continue
 
-                    # Copy compressed temp file to Final (with hash verification)
-                    copy_success, copy_error = self.file_manager.safe_copy(temp_compressed, final_path)
+                if dry_run:
+                    stats['moved'] += 1
+                    stats['compressed'] += 1
+                else:
+                    # ATOMIC: Compress → Copy → Delete
+                    temp_compressed = None
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                            temp_compressed = Path(tmp.name)
 
-                    if copy_success:
-                        # Both compress and copy succeeded - now safe to delete from Staging
-                        try:
-                            staging_file.unlink()
-                            stats['moved'] += 1
-                            stats['compressed'] += 1
-                            if progress_callback:
-                                progress_wrapper(f"Processing photo {idx}/{len(staging_files)}: {staging_file.name}")
-                        except Exception as e:
+                        compress_success, compress_error = self.image_processor.compress_jpeg_safe(
+                            staging_file, output_path=temp_compressed
+                        )
+
+                        if not compress_success:
                             stats['errors'] += 1
-                            if progress_callback:
-                                progress_callback(f"ERROR: Failed to delete {staging_file.name} from Staging: {str(e)}")
-                    else:
-                        stats['errors'] += 1
-                        if progress_callback:
-                            progress_callback(f"ERROR: Failed to copy {staging_file.name} to Final: {copy_error}")
+                            progress.advance(task)
+                            continue
 
-                finally:
-                    # Clean up temporary compressed file
-                    if temp_compressed and temp_compressed.exists():
-                        try:
-                            temp_compressed.unlink()
-                        except Exception:
-                            pass  # Ignore cleanup errors
+                        copy_success, copy_error = self.file_manager.safe_copy(temp_compressed, final_path)
 
-        # After moving all files to final, copy them back to camera
+                        if copy_success:
+                            try:
+                                staging_file.unlink()
+                                stats['moved'] += 1
+                                stats['compressed'] += 1
+                            except Exception as e:
+                                stats['errors'] += 1
+                        else:
+                            stats['errors'] += 1
+
+                    finally:
+                        if temp_compressed and temp_compressed.exists():
+                            try:
+                                temp_compressed.unlink()
+                            except Exception:
+                                pass
+
+                progress.advance(task)
+
+        # Step 2: Copy finalized files back to camera
         if CAMERA_PATH.exists():
-            # Get final files AFTER moving staging files
-            final_files = scan_for_images(FINAL_PATH, '.JPG')  # Move this line here
-            if final_files and progress_callback:
-                progress_callback(f"Copying {len(final_files)} photos back to camera...")
-
-            # Find the first available camera folder (e.g., 102_FUJI, 103_FUJI)
+            final_files = scan_for_images(FINAL_PATH, '.JPG')
             camera_folders = [folder for folder in CAMERA_PATH.glob('*_*') if folder.is_dir()]
 
-            if camera_folders:
-                # Use the first folder found (could be sorted if needed)
+            if camera_folders and final_files:
                 camera_folder = camera_folders[0]
-                if progress_callback:
-                    progress_callback(f"Using camera folder: {camera_folder.name}")
+                info(f"Copying to camera folder: {camera_folder.name}")
 
-                camera_stats = self._process_files(final_files, camera_folder, "photo",
-                                                   progress_wrapper if not dry_run else progress_callback,
-                                                   dry_run, delete_original=False)
-                stats['copied_to_camera'] = camera_stats['processed']
-                stats['skipped'] += camera_stats['skipped']
-                stats['errors'] += camera_stats['errors']
-            else:
-                if progress_callback:
-                    progress_callback("No camera folders found in DCIM directory. Skipping copy back to camera.")
-                stats['errors'] += 1
-        elif progress_callback:
-            progress_callback("Camera not connected. Skipping copy back to camera.")
+                with create_progress() as progress:
+                    task = progress.add_task(
+                        f"[cyan]Copying {len(final_files)} photos to camera",
+                        total=len(final_files)
+                    )
 
-        # Delete RAW files from camera for finalized images
+                    for file_path in final_files:
+                        dst_path = camera_folder / file_path.name
+                        is_dup, _ = self.file_manager.is_duplicate(file_path, dst_path)
+
+                        if dst_path.exists() and is_dup:
+                            stats['skipped'] += 1
+                        elif not dry_run:
+                            success, _ = self.file_manager.safe_copy(file_path, dst_path)
+                            if success:
+                                stats['copied_to_camera'] += 1
+                            else:
+                                stats['errors'] += 1
+                        else:
+                            stats['copied_to_camera'] += 1
+
+                        progress.advance(task)
+            elif not camera_folders:
+                info("No camera folders found - skipping copy to camera")
+        else:
+            info("Camera not connected - skipping copy to camera")
+
+        # Step 3: Delete RAW files from camera for finalized images
         if CAMERA_PATH.exists() and FINAL_PATH.exists():
-            if progress_callback:
-                progress_callback("Checking for RAW files on camera that can be deleted...")
-
-            # Get all JPGs in the final folder
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
 
-            # Scan camera for RAW files
             camera_files = self.file_manager.scan_camera_files()
             camera_raws = camera_files.get('.RAF', [])
-
-            # Find RAW files on camera that have corresponding JPGs in final folder
             finalized_raws = [raw for raw in camera_raws if raw.stem in final_jpg_bases]
 
-            if finalized_raws and progress_callback:
-                progress_callback(f"Deleting {len(finalized_raws)} RAW files from camera...")
+            if finalized_raws:
+                info(f"Deleting {len(finalized_raws)} RAW files from camera")
+                for raw_file in finalized_raws:
+                    if not dry_run:
+                        try:
+                            raw_file.unlink()
+                            stats['deleted_camera_raws'] += 1
+                        except Exception:
+                            stats['errors'] += 1
+                    else:
+                        stats['deleted_camera_raws'] += 1
 
-            # Delete RAW files from camera
-            deleted_count = 0
-            for raw_file in finalized_raws:
-                if not dry_run:
-                    try:
-                        raw_file.unlink()
-                        deleted_count += 1
-                    except Exception as e:
-                        stats['errors'] += 1
-                        if progress_callback:
-                            progress_callback(f"ERROR: Failed to delete RAW file {raw_file}: {str(e)}")
-                else:
-                    deleted_count += 1
-
-            stats['deleted_camera_raws'] = deleted_count
-
-            if progress_callback:
-                progress_callback(f"Deleted {deleted_count} RAW files from camera")
-
-        # Clean up orphaned RAW files
-        if progress_callback:
-            progress_callback("Checking for orphaned RAW files...")
-
+        # Step 4: Clean up orphaned local RAW files
         if RAWS_PATH.exists() and FINAL_PATH.exists():
-            # Get all JPGs in the final folder
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-
-            # Extract base filenames (without extension) from final JPGs
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
-
-            # Get all RAFs in the RAWs folder
             raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
+            orphaned_raws = [raw_file for raw_file in raw_files if raw_file.stem not in final_jpg_bases]
 
-            # Find orphaned RAWs (those without a corresponding JPG in final)
-            orphaned_raws = [raw_file for raw_file in raw_files
-                             if raw_file.stem not in final_jpg_bases]
-
-            # Count orphaned RAWs
             stats['orphaned_raws'] = len(orphaned_raws)
 
-            if progress_callback:
-                progress_callback(f"Found {len(orphaned_raws)} orphaned RAW files")
-
-            if not dry_run and orphaned_raws:
-                if progress_callback:
-                    progress_callback(f"Deleting {len(orphaned_raws)} orphaned RAW files...")
-
-                # Create a dummy destination - not actually used for deletions
-                dummy_dest = RAWS_PATH
-
-                # Process orphaned RAWs with the generic method
-                # The _process_files method will call unlink() on the original files
-                orphaned_stats = self._process_files(orphaned_raws, dummy_dest, "orphaned RAW",
-                                                     progress_wrapper if not dry_run else progress_callback,
-                                                     dry_run)
-
-                stats['deleted_raws'] = orphaned_stats['processed']
-                stats['errors'] += orphaned_stats['errors']
-
-        if progress_callback:
-            progress_callback("Finalization completed successfully!")
+            if orphaned_raws:
+                info(f"Found {len(orphaned_raws)} orphaned local RAW files")
+                if not dry_run:
+                    for raw_file in orphaned_raws:
+                        try:
+                            raw_file.unlink()
+                            stats['deleted_raws'] += 1
+                        except Exception:
+                            stats['errors'] += 1
+                else:
+                    stats['deleted_raws'] = len(orphaned_raws)
 
         return stats
 
@@ -457,11 +421,13 @@ class PhotoWorkflow:
 
         Args:
             dry_run (bool): If True, only simulate the cleanup without deleting files
-            progress_callback (callable): Optional callback function for progress updates
+            progress_callback (callable): Optional callback function for progress updates (DEPRECATED - not used)
 
         Returns:
             Dict[str, int]: Statistics about the cleanup operation
         """
+        from photo_flow.console_utils import info, create_progress
+
         stats = {
             'orphaned': 0,
             'deleted': 0,
@@ -472,8 +438,7 @@ class PhotoWorkflow:
         if not RAWS_PATH.exists() or not FINAL_PATH.exists():
             return stats
 
-        if progress_callback:
-            progress_callback("Scanning for orphaned RAW files...")
+        info("Scanning for orphaned RAW files...")
 
         # Get all JPGs in the final folder
         final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
@@ -491,23 +456,25 @@ class PhotoWorkflow:
         # Count orphaned RAWs
         stats['orphaned'] = len(orphaned_raws)
 
-        if progress_callback:
-            progress_callback(f"Found {len(orphaned_raws)} orphaned RAW files")
+        info(f"Found {len(orphaned_raws)} orphaned RAW files")
 
         # If not dry run, delete the orphaned RAWs
         if not dry_run and orphaned_raws:
-            if progress_callback:
-                progress_callback(f"Deleting {len(orphaned_raws)} orphaned RAW files...")
+            with create_progress() as progress:
+                task = progress.add_task(
+                    f"[cyan]Deleting {len(orphaned_raws)} orphaned RAW files",
+                    total=len(orphaned_raws)
+                )
 
-            # Use the generic process_files method for RAW deletion
-            # Create a dummy destination path (not actually used)
-            dummy_dest = RAWS_PATH
+                for raw_file in orphaned_raws:
+                    try:
+                        raw_file.unlink()
+                        stats['deleted'] += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete {raw_file.name}: {e}")
+                        stats['errors'] += 1
 
-            orphaned_stats = self._process_files(orphaned_raws, dummy_dest, "orphaned RAW",
-                                                 progress_callback, dry_run)
-
-            stats['deleted'] = orphaned_stats['processed']
-            stats['errors'] = orphaned_stats['errors']
+                    progress.advance(task)
 
         return stats
 
@@ -596,48 +563,39 @@ class PhotoWorkflow:
         if not dry_run:
             gallery_images_path.mkdir(parents=True, exist_ok=True)
 
-        # Scan for JPG files in FINAL_PATH
-        if progress_callback:
-            progress_callback("Scanning for JPG files in Final folder...")
-
         # Get JPG files with case-insensitive extension matching
         final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
         stats['scanned'] = len(final_jpgs)
-
-        if progress_callback:
-            progress_callback(f"Found {len(final_jpgs)} JPG files in Final folder")
 
         # Extract metadata and filter high-rated images
         high_rated_images = []
         all_metadata = []
 
-        if progress_callback:
-            progress_callback("Extracting metadata and filtering high-rated images...")
+        # Use Rich Progress for metadata extraction
+        from photo_flow.console_utils import create_progress
 
-        # Create a wrapper for the progress callback to show metadata extraction progress
-        def progress_wrapper(message):
-            if progress_callback:
-                progress_callback(message)
+        with create_progress() as progress:
+            task = progress.add_task(
+                f"[cyan]Extracting metadata from {len(final_jpgs)} images",
+                total=len(final_jpgs)
+            )
 
-        # Process each image
-        for i, jpg_path in enumerate(final_jpgs):
-            if progress_callback and i % 5 == 0:
-                progress_callback(f"Extracting metadata {i + 1}/{len(final_jpgs)}: {jpg_path.name}")
+            for jpg_path in final_jpgs:
+                # Extract metadata
+                metadata = MetadataExtractor.extract_metadata(jpg_path)
 
-            # Extract metadata
-            metadata = MetadataExtractor.extract_metadata(jpg_path)
+                # Add metadata to the list
+                all_metadata.append(metadata)
 
-            # Add metadata to the list
-            all_metadata.append(metadata)
+                # Check if image has rating 4+
+                rating = metadata.get('rating', 0)
 
-            # Check if image has rating 4+
-            rating = metadata.get('rating', 0)
+                if rating >= 4:
+                    high_rated_images.append((jpg_path, metadata))
 
-            if rating >= 4:
-                high_rated_images.append((jpg_path, metadata))
+                progress.advance(task)
 
-        if progress_callback:
-            progress_callback(f"Found {len(high_rated_images)} images with rating 4+")
+        info(f"Found {len(high_rated_images)} images with rating 4+")
 
         # Get existing gallery images
         existing_gallery_images = scan_for_images(gallery_images_path, '.JPG') if gallery_images_path.exists() else []
@@ -661,14 +619,9 @@ class PhotoWorkflow:
         logger.debug(f"Images to remove: {len(images_to_remove)}")
         logger.debug(f"Images to copy: {len(images_to_copy)}")
 
-        if progress_callback:
-            progress_callback(f"Images to copy: {len(images_to_copy)}, Images to remove: {len(images_to_remove)}")
-
         # Remove images that no longer qualify
         if not dry_run and images_to_remove:
-            if progress_callback:
-                progress_callback(f"Removing {len(images_to_remove)} images from gallery...")
-
+            info(f"Removing {len(images_to_remove)} images no longer rated 4+")
             for img_path in images_to_remove:
                 try:
                     img_path.unlink()
@@ -676,49 +629,48 @@ class PhotoWorkflow:
                 except Exception as e:
                     error_msg = f"Error removing {img_path}: {e}"
                     logger.error(error_msg)
-                    if progress_callback:
-                        progress_callback(f"ERROR: {error_msg}")
+                    from photo_flow.console_utils import error as print_error
+                    print_error(error_msg)
                     stats['errors'] += 1
 
-        # Copy high-rated images to gallery
-        if images_to_copy:
-            if progress_callback:
-                progress_callback(f"Copying {len(images_to_copy)} images to gallery...")
+        # Copy/update high-rated images to gallery
+        total_to_process = len(images_to_copy)
 
-            # Use the generic process_files method for copying
-            copy_stats = self._process_files(
-                images_to_copy,
-                gallery_images_path,
-                "gallery image",
-                progress_callback,
-                dry_run,
-                delete_original=False  # Don't delete original files
-            )
+        if total_to_process > 0:
+            with create_progress() as progress:
+                task = progress.add_task(
+                    f"[cyan]Copying {total_to_process} new images to gallery",
+                    total=total_to_process
+                )
 
-            stats['synced'] = copy_stats['processed']
-            stats['skipped'] = copy_stats['skipped']
-            stats['errors'] += copy_stats['errors']
+                for img_path in images_to_copy:
+                    if not dry_run:
+                        dst_path = gallery_images_path / img_path.name
+                        success, error_msg = FileManager.safe_copy(img_path, dst_path)
+                        if success:
+                            stats['synced'] += 1
+                        else:
+                            logger.error(f"Error copying {img_path.name}: {error_msg}")
+                            stats['errors'] += 1
+                    else:
+                        stats['synced'] += 1
+
+                    progress.advance(task)
 
         # Check existing high-rated images for changes
-        if progress_callback:
-            progress_callback("Checking existing high-rated images for changes...")
-
-        # Images to update (high-rated and already in gallery)
         images_to_update = [(img[0], img[1]) for img in high_rated_images if
                             img[0].name in existing_gallery_image_names]
 
-        # Count of unchanged images
         unchanged_count = 0
 
-        # Update images that have changed
+        # Check and update existing images silently (no verbose output)
         for src_path, metadata in images_to_update:
             dst_path = gallery_images_path / src_path.name
 
             # Skip if files are identical
             is_dup, err = FileManager.is_duplicate(src_path, dst_path)
             if err:
-                if progress_callback:
-                    progress_callback(f"ERROR: {err}")
+                logger.error(f"Error checking {src_path.name}: {err}")
                 stats['errors'] += 1
             elif is_dup:
                 unchanged_count += 1
@@ -731,19 +683,12 @@ class PhotoWorkflow:
                     if success:
                         stats['synced'] += 1
                     else:
-                        error_msg = f"Error updating {src_path.name}: {error}"
-                        logger.error(error_msg)
-                        if progress_callback:
-                            progress_callback(f"ERROR: {error_msg}")
+                        logger.error(f"Error updating {src_path.name}: {error}")
                         stats['errors'] += 1
                 except Exception as e:
-                    error_msg = f"Error updating {src_path.name}: {e}"
-                    logger.error(error_msg)
-                    if progress_callback:
-                        progress_callback(f"ERROR: {error_msg}")
+                    logger.error(f"Error updating {src_path.name}: {e}")
                     stats['errors'] += 1
             else:
-                # In dry run mode, just count it
                 stats['synced'] += 1
 
         stats['unchanged'] = unchanged_count
@@ -756,104 +701,77 @@ class PhotoWorkflow:
             stats['total_in_gallery'] = len(existing_gallery_images) - len(images_to_remove) + len(images_to_copy)
 
         # Generate metadata JSON for all high-rated images
-        if progress_callback:
-            progress_callback("Generating metadata JSON...")
-
-        # Filter metadata for high-rated images only
         high_rated_metadata = [metadata for metadata in all_metadata if metadata.get('rating', 0) >= 4]
 
-        # Generate and save metadata JSON
         if not dry_run:
             json_path = GALLERY_PATH / "metadata.json"
             stats['json_updated'] = MetadataExtractor.generate_metadata_json(high_rated_metadata, json_path)
 
-        if progress_callback:
-            progress_callback("Gallery sync completed successfully!")
-
         # Build the gallery and sync to remote server
         if not dry_run:
-            # Get the photo_gallery directory path
             photo_gallery_path = GALLERY_PATH.parent
 
-            if progress_callback:
-                progress_callback("Building gallery with npm run build...")
+            # Use status spinner for build
+            from photo_flow.console_utils import show_status
 
             try:
-                # Read the required Node version from .nvmrc
-                nvmrc_path = photo_gallery_path / ".nvmrc"
-                if nvmrc_path.exists():
-                    with open(nvmrc_path, 'r') as f:
-                        node_version = f.read().strip()
+                with show_status("Building gallery with npm", spinner="dots"):
+                    # Read the required Node version from .nvmrc
+                    nvmrc_path = photo_gallery_path / ".nvmrc"
+                    if nvmrc_path.exists():
+                        with open(nvmrc_path, 'r') as f:
+                            node_version = f.read().strip()
 
-                    # Remove 'v' prefix if present for the path
-                    node_version_clean = node_version.lstrip('v')
-                    node_version_path = os.path.expanduser(f"~/.nvm/versions/node/v{node_version_clean}/bin")
+                        node_version_clean = node_version.lstrip('v')
+                        node_version_path = os.path.expanduser(f"~/.nvm/versions/node/v{node_version_clean}/bin")
 
-                    env = os.environ.copy()
-                    env["PATH"] = f"{node_version_path}:{env['PATH']}"
-                else:
-                    env = None
+                        env = os.environ.copy()
+                        env["PATH"] = f"{node_version_path}:{env['PATH']}"
+                    else:
+                        env = None
 
-                # Change to photo_gallery directory and run npm build
-                build_process = subprocess.run(
-                    ["npm", "run", "build"],
-                    cwd=photo_gallery_path,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    env=env
-                )
+                    # Run npm build
+                    build_process = subprocess.run(
+                        ["npm", "run", "build"],
+                        cwd=photo_gallery_path,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        env=env
+                    )
 
-                if progress_callback:
-                    progress_callback("Gallery build completed successfully.")
-                    progress_callback("Syncing dist folder to remote server...")
+                # Use status spinner for rsync
+                with show_status("Syncing to remote server", spinner="dots"):
+                    rsync_process = subprocess.run(
+                        [
+                            "rsync",
+                            "-avz",
+                            "--delete",
+                            f"{photo_gallery_path}/dist/",
+                            "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery"
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
 
-                # Sync the dist folder to the remote server
-                # Using rsync with --delete flag to delete all content in the hosted photo_gallery
-                rsync_process = subprocess.run(
-                    [
-                        "rsync",
-                        "-avz",
-                        "--delete",
-                        f"{photo_gallery_path}/dist/",
-                        "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery"
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-
-                if progress_callback:
-                    progress_callback("Gallery successfully synced to remote server.")
-
-                # Add build and sync info to stats
                 stats['build_successful'] = True
                 stats['sync_successful'] = True
 
             except subprocess.CalledProcessError as e:
-                error_msg = f"Error during build or sync: {e}"
-                stdout_msg = f"Command output: {e.stdout}"
-                stderr_msg = f"Command error: {e.stderr}"
+                from photo_flow.console_utils import error as print_error
+                print_error(f"Build/sync failed: {e.stderr if e.stderr else str(e)}")
 
-                logger.error(error_msg)
-                logger.error(stdout_msg)
-                logger.error(stderr_msg)
+                logger.error(f"Error during build or sync: {e}")
+                logger.error(f"Command output: {e.stdout}")
+                logger.error(f"Command error: {e.stderr}")
 
                 stats['errors'] += 1
                 stats['build_successful'] = False
                 stats['sync_successful'] = False
-
-                if progress_callback:
-                    progress_callback(f"ERROR: {error_msg}")
-                    progress_callback(f"ERROR: {stdout_msg}")
-                    progress_callback(f"ERROR: {stderr_msg}")
         else:
-            # In dry run mode
-            if progress_callback:
-                progress_callback("DRY RUN: Would build gallery and sync to remote server")
-
-            # Add build and sync info to stats for dry run
-            stats['build_successful'] = False
+            # Dry run - don't actually build/sync
+            info("[dim]Dry run: Skipping npm build and remote sync[/dim]")
             stats['sync_successful'] = False
 
         return stats
@@ -868,9 +786,15 @@ class PhotoWorkflow:
         Automatically tries direct connection first (IPv6), then falls back to
         ProxyJump via VPS if direct connection fails (IPv4-only networks).
 
+        Args:
+            dry_run (bool): If True, only simulate the backup without syncing
+            progress_callback (callable): Optional callback function for progress updates (DEPRECATED - not used)
+
         Returns:
             Dict with keys: 'scanned', 'sync_successful' (bool), 'errors' (int), 'connection_method' (str)
         """
+        from photo_flow.console_utils import info, error as print_error, warning
+
         stats = {
             'scanned': 0,
             'sync_successful': False,
@@ -880,13 +804,11 @@ class PhotoWorkflow:
 
         # Pre-checks
         if not FINAL_PATH.exists():
-            if progress_callback:
-                progress_callback("Final folder does not exist. Nothing to backup.")
+            print_error("Final folder does not exist. Nothing to backup.")
             return stats
 
         if shutil.which("rsync") is None:
-            if progress_callback:
-                progress_callback("ERROR: rsync not found on PATH. Please install rsync.")
+            print_error("rsync not found on PATH. Please install rsync.")
             stats['errors'] += 1
             return stats
 
@@ -898,15 +820,13 @@ class PhotoWorkflow:
             # Safety check: Ensure Final folder has a reasonable number of files
             # This prevents accidentally wiping the backup if Final is empty or unmounted
             if len(jpgs) < 100:
-                if progress_callback:
-                    progress_callback(f"WARNING: Final folder only has {len(jpgs)} files. Expected 1000+.")
-                    progress_callback("This could indicate Final folder is empty or unmounted.")
-                    progress_callback("Backup aborted to prevent accidental deletion of remote files.")
+                warning(f"Final folder only has {len(jpgs)} files. Expected 1000+.")
+                warning("This could indicate Final folder is empty or unmounted.")
+                warning("Backup aborted to prevent accidental deletion of remote files.")
                 stats['errors'] += 1
                 return stats
         except Exception as e:
-            if progress_callback:
-                progress_callback(f"ERROR: Failed to scan Final folder: {e}")
+            print_error(f"Failed to scan Final folder: {e}")
             stats['errors'] += 1
             return stats
 
@@ -931,27 +851,25 @@ class PhotoWorkflow:
                 cmd.append("-n")
             cmd.extend([src, remote])
 
-            if progress_callback:
-                if method == "direct":
-                    progress_callback("Attempting direct connection (IPv6)...")
-                else:
-                    progress_callback("Direct connection failed. Trying ProxyJump via VPS (IPv4)...")
+            if method == "direct":
+                info("Attempting direct connection (IPv6)...")
+            else:
+                warning("Direct connection failed.")
+                info("Trying ProxyJump via VPS (IPv4)...")
 
             try:
                 # Let rsync progress output flow to terminal (don't capture stderr)
                 subprocess.run(cmd, check=True)
                 stats['sync_successful'] = True
                 stats['connection_method'] = method
-                if progress_callback:
-                    method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
-                    progress_callback(f"Backup completed successfully using {method_desc}.")
+                method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
+                info(f"[green]✓[/green] Backup completed successfully using {method_desc}")
                 return stats
             except subprocess.CalledProcessError as e:
                 if method == "proxyjump":
                     # Both methods failed
                     stats['errors'] += 1
-                    if progress_callback:
-                        progress_callback(f"ERROR: Both connection methods failed. Last error: {e}")
+                    print_error(f"Both connection methods failed. Last error: {e}")
                 # Continue to next method
 
         return stats

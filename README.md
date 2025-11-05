@@ -70,7 +70,7 @@ photoflow import --dry-run
 photoflow import
 ```
 
-**Output**: Progress updates, success/error indicators (✓/✗), and structured summary
+**Output**: Rich progress bar showing completion, success/error indicators (✓/✗), and structured summary
 
 ### `photoflow finalize`
 Move and compress approved photos from staging to final folder:
@@ -90,7 +90,7 @@ photoflow finalize --dry-run
 photoflow finalize
 ```
 
-**Output**: Progress updates for compression, success indicators, detailed summary
+**Output**: Rich progress bars for each step (compress/move, copy to camera, cleanup), success indicators, detailed summary
 
 ### `photoflow cleanup`
 Remove unused RAW files that don’t have corresponding JPGs in the Final folder.
