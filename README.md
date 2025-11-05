@@ -123,6 +123,7 @@ photoflow sync-gallery
 ### `photoflow backup`
 Backup the Final folder to your homelab via rsync:
 - **Automatic connectivity fallback**: Tries direct IPv6 first, falls back to ProxyJump via VPS for IPv4-only networks
+- **Smart filtering**: Excludes system files (`.DS_Store`, `._*`, `Thumbs.db`, etc.) - only backs up your photos
 - Syncs the contents of Final/ to the remote directory
 - Uses rsync for safe, interruptible transfers (--partial)
 - Keeps remote in sync (uses --delete)
@@ -155,6 +156,7 @@ HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
 HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 for ProxyJump fallback
 HOMELAB_JUMP_USER = "jkrumm"
 RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
+RSYNC_EXCLUDE_PATTERNS = [".DS_Store", "._*", "Thumbs.db", ".Spotlight-V100", ".Trashes", ".fseventsd"]
 RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
 RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
 

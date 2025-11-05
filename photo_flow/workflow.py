@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 from typing import Dict, List
 
-from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH, HOMELAB_USER, HOMELAB_HOST, HOMELAB_DEST_PATH, RSYNC_FLAGS, RSYNC_SSH_BASE, RSYNC_SSH_JUMP
+from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH, HOMELAB_USER, HOMELAB_HOST, HOMELAB_DEST_PATH, RSYNC_FLAGS, RSYNC_EXCLUDE_PATTERNS, RSYNC_SSH_BASE, RSYNC_SSH_JUMP
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
@@ -890,13 +890,25 @@ class PhotoWorkflow:
             stats['errors'] += 1
             return stats
 
-        # Count JPGs (informational)
+        # Count JPGs (informational and safety check)
         try:
             jpgs = scan_for_images(FINAL_PATH, '.JPG')
             stats['scanned'] = len(jpgs)
-        except Exception:
-            # Non-fatal
-            pass
+
+            # Safety check: Ensure Final folder has a reasonable number of files
+            # This prevents accidentally wiping the backup if Final is empty or unmounted
+            if len(jpgs) < 100:
+                if progress_callback:
+                    progress_callback(f"WARNING: Final folder only has {len(jpgs)} files. Expected 1000+.")
+                    progress_callback("This could indicate Final folder is empty or unmounted.")
+                    progress_callback("Backup aborted to prevent accidental deletion of remote files.")
+                stats['errors'] += 1
+                return stats
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"ERROR: Failed to scan Final folder: {e}")
+            stats['errors'] += 1
+            return stats
 
         remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(HOMELAB_DEST_PATH)}"
         src = f"{str(FINAL_PATH)}/"  # trailing slash = sync contents
@@ -911,6 +923,9 @@ class PhotoWorkflow:
             # Build rsync command
             cmd = ["rsync"]
             cmd.extend(RSYNC_FLAGS)
+            # Add exclusion patterns for system files
+            for pattern in RSYNC_EXCLUDE_PATTERNS:
+                cmd.extend(["--exclude", pattern])
             cmd.extend(["-e", ssh_cmd])
             if dry_run:
                 cmd.append("-n")
@@ -923,7 +938,8 @@ class PhotoWorkflow:
                     progress_callback("Direct connection failed. Trying ProxyJump via VPS (IPv4)...")
 
             try:
-                subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
+                # Let rsync progress output flow to terminal (don't capture stderr)
+                subprocess.run(cmd, check=True)
                 stats['sync_successful'] = True
                 stats['connection_method'] = method
                 if progress_callback:

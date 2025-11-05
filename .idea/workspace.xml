@@ -4,15 +4,12 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="chore: added deep CLAUDE analysis and AI guidance">
+    <list default="true" id="a54f970d-8ef3-43e3-ab2f-cecd90477341" name="Changes" comment="feat: integrate Rich for enhanced CLI output and logging&#10;&#10;- Added `console_utils.py` for reusable Rich-based console helpers.&#10;- Updated CLI commands to use Rich for color-coded status, progress updates, and structured summaries.&#10;- Improved logging with consistent error handling using `logger` and Rich.&#10;- Enhanced README with output examples and feature updates.">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CODE_QUALITY_ISSUES.md" beforeDir="false" afterPath="$PROJECT_DIR$/CODE_QUALITY_ISSUES.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/photo_flow/cli.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/cli.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/photo_flow/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/photo_flow/workflow.py" beforeDir="false" afterPath="$PROJECT_DIR$/photo_flow/workflow.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -86,7 +83,7 @@
       <workItem from="1760372667404" duration="7863000" />
       <workItem from="1760647671723" duration="2698000" />
       <workItem from="1762291060593" duration="5548000" />
-      <workItem from="1762370418698" duration="1804000" />
+      <workItem from="1762370418698" duration="3580000" />
     </task>
     <task id="LOCAL-00001" summary="refactor: rollback to use Python">
       <option name="closed" value="true" />
@@ -216,7 +213,15 @@
       <option name="project" value="LOCAL" />
       <updated>1762357073736</updated>
     </task>
-    <option name="localTasksCounter" value="17" />
+    <task id="LOCAL-00017" summary="feat: integrate Rich for enhanced CLI output and logging&#10;&#10;- Added `console_utils.py` for reusable Rich-based console helpers.&#10;- Updated CLI commands to use Rich for color-coded status, progress updates, and structured summaries.&#10;- Improved logging with consistent error handling using `logger` and Rich.&#10;- Enhanced README with output examples and feature updates.">
+      <option name="closed" value="true" />
+      <created>1762372774524</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1762372774524</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -252,6 +257,7 @@
     <MESSAGE value="feat: added backup script for final JPGs" />
     <MESSAGE value="feat: added compression during the finalization step" />
     <MESSAGE value="chore: added deep CLAUDE analysis and AI guidance" />
-    <option name="LAST_COMMIT_MESSAGE" value="chore: added deep CLAUDE analysis and AI guidance" />
+    <MESSAGE value="feat: integrate Rich for enhanced CLI output and logging&#10;&#10;- Added `console_utils.py` for reusable Rich-based console helpers.&#10;- Updated CLI commands to use Rich for color-coded status, progress updates, and structured summaries.&#10;- Improved logging with consistent error handling using `logger` and Rich.&#10;- Enhanced README with output examples and feature updates." />
+    <option name="LAST_COMMIT_MESSAGE" value="feat: integrate Rich for enhanced CLI output and logging&#10;&#10;- Added `console_utils.py` for reusable Rich-based console helpers.&#10;- Updated CLI commands to use Rich for color-coded status, progress updates, and structured summaries.&#10;- Improved logging with consistent error handling using `logger` and Rich.&#10;- Enhanced README with output examples and feature updates." />
   </component>
 </project>

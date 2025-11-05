@@ -22,8 +22,20 @@ HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
 HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 address
 HOMELAB_JUMP_USER = "jkrumm"
 # Default rsync flags optimized for speed and safety over SSH
-# -a archive, -v verbose, --delete keep remote in sync, --partial resume partial transfers, --whole-file avoids delta CPU overhead for new/changed files
+# -a archive, -v verbose (shows files being transferred), --delete keep remote in sync
+# --partial resume partial transfers, --whole-file avoids delta CPU overhead for new/changed files
+# --progress shows transfer speed and file numbers
 RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
+# Exclude system files from rsync (macOS resource forks, Windows thumbnails, etc.)
+# These files are not portable and not part of the actual photo data
+RSYNC_EXCLUDE_PATTERNS = [
+    ".DS_Store",      # macOS folder view settings
+    "._*",            # macOS AppleDouble resource forks (extended attributes)
+    "Thumbs.db",      # Windows thumbnail cache
+    ".Spotlight-V100", # macOS Spotlight index
+    ".Trashes",       # macOS trash folder
+    ".fseventsd",     # macOS filesystem events
+]
 # Use a faster SSH configuration: disable SSH stream compression and prefer a fast cipher
 # Note: You can change this if your environment prefers a different cipher.
 RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
