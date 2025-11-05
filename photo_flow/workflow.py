@@ -5,6 +5,7 @@ This module provides the main workflow logic for the application.
 """
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
@@ -202,6 +203,7 @@ class PhotoWorkflow:
         """
         stats = {
             'moved': 0,
+            'compressed': 0,
             'copied_to_camera': 0,
             'orphaned_raws': 0,
             'deleted_raws': 0,
@@ -258,15 +260,80 @@ class PhotoWorkflow:
                 else:
                     progress_callback(message)
 
-        # Process each file in staging
+        # ATOMIC OPERATION: Compress-then-copy each file individually
+        # This ensures files in Final are ALWAYS compressed, even if interrupted
         if staging_files and progress_callback:
-            progress_callback(f"Moving {len(staging_files)} photos to final folder...")
+            progress_callback(f"Processing {len(staging_files)} photos (compress → Final)...")
 
-        staging_stats = self._process_files(staging_files, FINAL_PATH, "photo",
-                                            progress_wrapper if not dry_run else progress_callback, dry_run)
-        stats['moved'] = staging_stats['processed']
-        stats['skipped'] += staging_stats['skipped']
-        stats['errors'] += staging_stats['errors']
+        for idx, staging_file in enumerate(staging_files, 1):
+            final_path = FINAL_PATH / staging_file.name
+
+            # Check if file already exists in Final (skip duplicates)
+            if final_path.exists():
+                is_dup, _ = self.file_manager.is_duplicate(staging_file, final_path)
+                if is_dup:
+                    stats['skipped'] += 1
+                    if progress_callback:
+                        progress_callback(f"Skipping {staging_file.name} (already exists in Final)")
+                    continue
+
+            if dry_run:
+                # In dry-run, just report what would happen
+                stats['moved'] += 1
+                stats['compressed'] += 1
+                if progress_callback:
+                    progress_wrapper(f"Processing photo {idx}/{len(staging_files)}: {staging_file.name}")
+            else:
+                # ATOMIC OPERATION FOR EACH FILE:
+                # 1. Compress staging file to temporary file
+                # 2. Copy compressed temp to Final (with hash verification)
+                # 3. Delete from Staging (only if copy succeeded)
+
+                temp_compressed = None
+                try:
+                    # Create temporary file for compressed version
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                        temp_compressed = Path(tmp.name)
+
+                    # Compress staging file to temp file
+                    compress_success, compress_error = self.image_processor.compress_jpeg_safe(
+                        staging_file,
+                        output_path=temp_compressed
+                    )
+
+                    if not compress_success:
+                        stats['errors'] += 1
+                        if progress_callback:
+                            progress_callback(f"ERROR: Failed to compress {staging_file.name}: {compress_error}")
+                        continue
+
+                    # Copy compressed temp file to Final (with hash verification)
+                    copy_success, copy_error = self.file_manager.safe_copy(temp_compressed, final_path)
+
+                    if copy_success:
+                        # Both compress and copy succeeded - now safe to delete from Staging
+                        try:
+                            staging_file.unlink()
+                            stats['moved'] += 1
+                            stats['compressed'] += 1
+                            if progress_callback:
+                                progress_wrapper(f"Processing photo {idx}/{len(staging_files)}: {staging_file.name}")
+                        except Exception as e:
+                            stats['errors'] += 1
+                            if progress_callback:
+                                progress_callback(f"ERROR: Failed to delete {staging_file.name} from Staging: {str(e)}")
+                    else:
+                        stats['errors'] += 1
+                        if progress_callback:
+                            progress_callback(f"ERROR: Failed to copy {staging_file.name} to Final: {copy_error}")
+
+                finally:
+                    # Clean up temporary compressed file
+                    if temp_compressed and temp_compressed.exists():
+                        try:
+                            temp_compressed.unlink()
+                        except Exception:
+                            pass  # Ignore cleanup errors
 
         # After moving all files to final, copy them back to camera
         if CAMERA_PATH.exists():

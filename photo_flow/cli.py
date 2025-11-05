@@ -100,6 +100,7 @@ def finalize(dry_run):
 
     click.echo("Finalization Results:")
     click.echo(f"  Files moved to Final folder: {stats['moved']}")
+    click.echo(f"  Files compressed (5200×3467, Q92, 4:4:4): {stats.get('compressed', 0)}")
     click.echo(f"  Files copied back to camera: {stats['copied_to_camera']}")
     click.echo(f"  Orphaned RAW files found: {stats['orphaned_raws']}")
     click.echo(f"  Orphaned RAW files deleted: {stats['deleted_raws']}")

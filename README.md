@@ -12,7 +12,9 @@ A CLI tool for managing Fuji X-T4 camera photos/videos with a staging workflow f
 - Hash-based duplicate detection and post-copy verification
 - Dry-run mode for import, cleanup, and sync-gallery
 - Confirmation prompts for destructive actions
-- Copy-first approach: only delete sources after verified copy
+- **Safety-first architecture**: copy-first approach, atomic operations, automatic backups
+- **Complete metadata preservation**: All EXIF, IPTC, XMP data preserved during compression
+- **Smart connectivity**: Automatic IPv4/IPv6 fallback for backups when traveling
 - Case-insensitive handling for .JPG/.RAF
 
 ## Quick Start
@@ -64,9 +66,12 @@ photoflow import
 ```
 
 ### `photoflow finalize`
-Move approved photos from staging to final folder:
-- Moves photos to Final folder
-- Copies them back to camera for viewing
+Move and compress approved photos from staging to final folder:
+- **Atomically processes each photo**: compress → copy to Final → delete from Staging
+  - **Compresses** (resize to ≤5200×3467, quality 92, 4:4:4 chroma, preserves ALL metadata)
+  - **Interrupt-safe**: Ctrl+C leaves remaining files in Staging for retry
+  - **Guarantees**: Every file in Final is compressed
+- Copies compressed photos back to camera for viewing
 - Removes orphaned RAW files (no matching JPG in Final)
 - Cleans up RAW files from camera
 
@@ -108,6 +113,7 @@ photoflow sync-gallery
 
 ### `photoflow backup`
 Backup the Final folder to your homelab via rsync:
+- **Automatic connectivity fallback**: Tries direct IPv6 first, falls back to ProxyJump via VPS for IPv4-only networks
 - Syncs the contents of Final/ to the remote directory
 - Uses rsync for safe, interruptible transfers (--partial)
 - Keeps remote in sync (uses --delete)
@@ -133,19 +139,23 @@ FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
 
-# Remote backup (homelab)
+# Remote backup (homelab) - automatic IPv4/IPv6 fallback
 HOMELAB_USER = "jkrumm"
 HOMELAB_HOST = "homelab.jkrumm.com"
 HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 for ProxyJump fallback
+HOMELAB_JUMP_USER = "jkrumm"
 RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
-RSYNC_SSH = "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
+RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
+RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```
 
-### Prerequisites for gallery build/sync (optional)
-- Node.js and npm (the workflow respects `.nvmrc` if present)
-- rsync available on your system
+### Prerequisites
+- **exiftool** for metadata preservation: `brew install exiftool`
+- **rsync** for backups: usually pre-installed on macOS
+- Node.js and npm for gallery build/sync (optional, respects `.nvmrc` if present)
 
 ## File Structure
 ```

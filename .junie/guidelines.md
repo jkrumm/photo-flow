@@ -43,15 +43,23 @@ class MetadataExtractor:
     def generate_metadata_json(items: List[Dict[str, Any]], json_path: Path) -> bool
 ```
 
+### 3. Image Processor (`image_processor.py`)
+```python
+class ImageProcessor:
+    def apply_clarity_effect(jpg_path: Path) -> Path
+    def preserve_exif(original: Path, processed: Path) -> None
+    def compress_jpeg_safe(input_path: Path, max_width=4416, max_height=2944, quality=85) -> tuple[bool, str]
+```
+
 ### 3. Workflow Manager (`workflow.py`)
 ```python
 class PhotoWorkflow:
     def import_from_camera()
-    def finalize_staging()
+    def finalize_staging()  # Now includes safe JPEG compression
     def cleanup_unused_raws()
     def get_status() -> StatusReport
     def sync_gallery()
-    def backup_final_to_homelab()
+    def backup_final_to_homelab()  # Automatic IPv4/IPv6 fallback via ProxyJump
 ```
 
 ### 4. CLI Interface (`cli.py`)
@@ -131,10 +139,11 @@ Status Report:
 
 ### Finalization Phase
 ```
-1. Move staging JPGs to Final folder
-2. Copy Final JPGs back to camera (to the first available DCIM subfolder)
-3. Clear staging folder
-4. Optionally delete matching RAWs from camera for finalized images
+1. Move staging JPGs to Final folder (safe copy + verify + delete original)
+2. Compress Final JPGs (resize to ≤4416×2944, quality 85, preserve all metadata)
+3. Copy compressed Final JPGs back to camera (to the first available DCIM subfolder)
+4. Clear staging folder
+5. Optionally delete matching RAWs from camera for finalized images
 ```
 
 ### Cleanup Phase
@@ -157,10 +166,16 @@ Status Report:
 ```
 
 ## Safety Mechanisms
-1. **Copy-first approach** - Never delete source until copy verified
-2. **Hash verification** - Confirm file integrity after copy
-3. **Dry-run mode** - Preview all operations
-4. **Confirmation prompts** - For destructive operations (RAW cleanup)
+1. **Copy-first approach** - Never delete source until copy verified with hash comparison
+2. **Hash verification** - Confirm file integrity after every copy operation
+3. **Atomic file operations** - Use temporary files + atomic replace to prevent corruption
+4. **Backup/restore mechanism** - Create backups before in-place modifications, restore on failure
+5. **Complete metadata preservation** - Use exiftool to preserve ALL metadata (EXIF, IPTC, XMP, ratings)
+6. **Early validation** - Check dependencies (rsync, exiftool) before operations
+7. **Graceful error handling** - Clean up temporary files, detailed error messages
+8. **Dry-run mode** - Preview all operations without making changes
+9. **Confirmation prompts** - For destructive operations (RAW cleanup)
+10. **Interruptible operations** - Safe to Ctrl+C at any stage without data loss
 
 ## CLI Commands
 
@@ -193,12 +208,15 @@ FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
 
-# Homelab backup (rsync)
+# Homelab backup (rsync with automatic IPv4/IPv6 fallback)
 HOMELAB_USER = "jkrumm"
 HOMELAB_HOST = "homelab.jkrumm.com"
 HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 address for ProxyJump fallback
+HOMELAB_JUMP_USER = "jkrumm"
 RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
-RSYNC_SSH = "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
+RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
+RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```
