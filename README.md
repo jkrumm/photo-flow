@@ -4,6 +4,12 @@ A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging w
 
 > **Note**: This is a personal tool designed for local use on a single developer's machine, not production software intended for distribution or multi-user environments.
 
+## TODOs
+- [ ] Validate RAW flow (move, cleanup, backup to HDD)
+- [ ] Add Bottom padding to website
+- [ ] Make sure camera is clean also all Movies, RAWs, JPGs
+- [ ] Setup Immich
+
 ## Features
 
 - Import photos and videos from Fuji X-T4 camera
@@ -58,9 +64,11 @@ Check the current status of your workflow:
 
 ### `photoflow import`
 Import files from your camera:
-- JPG files → Staging folder
-- RAW files → RAWs backup folder
-- Video files → External SSD
+- JPG files → Staging folder (deleted from camera after verification)
+- RAW files → RAWs backup folder (deleted from camera after verification)
+- Video files → External SSD (deleted from camera after verification)
+
+**Result**: Camera is completely empty after import, ready for new photos.
 
 Add `--dry-run` to preview without copying files.
 
@@ -200,22 +208,26 @@ All commands provide:
 
 ## File Structure
 ```
-Camera:
+Camera (before import):
 /Volumes/Fuji X-T4/DCIM/
 ├── 102_FUJI/
 │   ├── DSCF0430.JPG
 │   ├── DSCF0430.RAF
 │   └── DSCF1451.MOV
 
+Camera (after import):
+/Volumes/Fuji X-T4/DCIM/
+└── 102_FUJI/  # Empty - all files moved
+
 Local:
 Pictures/
-├── Staging/          # DSCF0430.JPG
+├── Staging/          # DSCF0430.JPG (moved from camera)
 ├── Final/            # Final approved photos → upload to immich
 └── RAWs/             # DSCF0430.RAF (backup)
 
 External SSD:
 /Volumes/EXT/Videos/Videos/
-└── DSCF1451.MOV
+└── DSCF1451.MOV  # Moved from camera
 
 Gallery workspace:
 /Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/

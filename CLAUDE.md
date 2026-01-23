@@ -14,8 +14,8 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 | Operation | Source | Destination | Delete Original | Hash Verify | Filter |
 |-----------|--------|-------------|-----------------|-------------|--------|
 | Import Videos | Camera/*.MOV | SSD_PATH | ✅ Yes | ✅ Yes | System files |
-| Import Photos | Camera/*.JPG | STAGING_PATH | ❌ No | ✅ Yes | System files + already in Final |
-| Import RAWs | Camera/*.RAF | RAWS_PATH | ❌ No | ✅ Yes | System files |
+| Import Photos | Camera/*.JPG | STAGING_PATH | ✅ Yes | ✅ Yes | System files + already in Final |
+| Import RAWs | Camera/*.RAF | RAWS_PATH | ✅ Yes | ✅ Yes | System files |
 | Finalize | STAGING/*.JPG | FINAL_PATH | ✅ Yes | ✅ Yes | None |
 | Compress | FINAL/*.JPG | FINAL/*.JPG (in-place, 5200×3467, Q92, 4:4:4) | ❌ No (backup created) | ✅ Yes | None |
 | Copy to Camera | FINAL/*.JPG (compressed) | Camera/first subfolder | ❌ No | ✅ Yes | None |
@@ -216,9 +216,9 @@ StatusReport:
 1. Scan camera: `FileManager.scan_camera_files()`
 2. **Smart filtering**: Exclude JPGs already in FINAL_PATH (prevents re-importing finalized photos)
 3. Route files:
-   - MOV → SSD_PATH (delete original after verify)
-   - JPG → STAGING_PATH (keep original on camera)
-   - RAF → RAWS_PATH (keep original on camera)
+   - MOV → SSD_PATH (MOVE: delete original after verify)
+   - JPG → STAGING_PATH (MOVE: delete original after verify)
+   - RAF → RAWS_PATH (MOVE: delete original after verify)
 4. Duplicate detection: Skip if hash matches destination
 5. **Output**: Rich Progress bar with file count and completion percentage
 
@@ -483,11 +483,11 @@ def photoflow()
 - New approach: Compress → Move (atomic unit, never uncompressed in Final)
 
 ### Delete Behavior Specifics
-- **Import videos**: ✅ Deleted from camera after successful copy
-- **Import photos**: ❌ NOT deleted from camera
-- **Import RAWs**: ❌ NOT deleted from camera
+- **Import videos**: ✅ Deleted from camera after successful copy (MOVE operation)
+- **Import photos**: ✅ Deleted from camera after successful copy (MOVE operation)
+- **Import RAWs**: ✅ Deleted from camera after successful copy (MOVE operation)
 - **Finalize**: ✅ Deleted from staging after compress+copy to Final (atomic)
-- **Finalize RAWs**: ✅ Matching RAWs deleted from camera after JPG finalized
+- **Finalize RAWs**: ✅ Matching RAWs deleted from camera (legacy - usually already deleted during import)
 
 ---
 
@@ -722,6 +722,12 @@ def function_name(param1: Type1, param2: Type2) -> ReturnType:
 
 ### After Any Code Change:
 
+**0. Update documentation (MANDATORY):**
+- [ ] Update README.md if user-facing behavior changed
+- [ ] Update CLAUDE.md if internal behavior or architecture changed
+- [ ] Update SAFETY.md if safety mechanisms changed
+- [ ] Keep documentation in sync with code changes
+
 **1. Run dry-run tests:**
 ```bash
 photoflow status
@@ -816,8 +822,7 @@ State 1: ON CAMERA
 ↓ photoflow import
 
 State 2: IMPORTED
-├── Camera: DSCF0430.JPG, DSCF0430.RAF (kept)
-├── Camera: DSCF1451.MOV (deleted)
+├── Camera: (empty - all files moved)
 ├── Staging: DSCF0430.JPG
 ├── RAWs: DSCF0430.RAF
 └── SSD: DSCF1451.MOV
@@ -825,8 +830,7 @@ State 2: IMPORTED
 ↓ photoflow finalize
 
 State 3: FINALIZED
-├── Camera: DSCF0430.JPG (compressed copy)
-├── Camera: DSCF0430.RAF (deleted)
+├── Camera: DSCF0430.JPG (compressed copy added back)
 ├── Staging: (empty)
 ├── RAWs: DSCF0430.RAF (kept)
 ├── Final: DSCF0430.JPG (compressed)
