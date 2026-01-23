@@ -16,7 +16,8 @@ from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, 
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
-from photo_flow.console_utils import console, create_progress, show_status, info
+from photo_flow.console_utils import console, create_progress, show_status, info, warning
+from photo_flow.immich_client import trigger_immich_scan
 
 logger = logging.getLogger(__name__)
 
@@ -165,13 +166,13 @@ class PhotoWorkflow:
             all_files.append(jpg)
             file_destinations.append(STAGING_PATH)
             file_types.append("photo")
-            delete_flags.append(False)
+            delete_flags.append(True)
 
         for raf in raf_files:
             all_files.append(raf)
             file_destinations.append(RAWS_PATH)
             file_types.append("RAW")
-            delete_flags.append(False)
+            delete_flags.append(True)
 
         mov_count = jpg_count = raf_count = 0
         mov_skip = jpg_skip = raf_skip = 0
@@ -372,6 +373,8 @@ class PhotoWorkflow:
             info("Camera not connected - skipping copy to camera")
 
         # Step 3: Delete RAW files from camera for finalized images
+        # Note: RAW files are now deleted during import, so this will typically find nothing.
+        # Kept for backwards compatibility in case RAWs are manually added to camera.
         if CAMERA_PATH.exists() and FINAL_PATH.exists():
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
             final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
@@ -864,6 +867,17 @@ class PhotoWorkflow:
                 stats['connection_method'] = method
                 method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
                 info(f"[green]✓[/green] Backup completed successfully using {method_desc}")
+
+                # Trigger Immich library scan after successful backup
+                if not dry_run:
+                    info("Triggering Immich library scan...")
+                    immich_success, immich_msg = trigger_immich_scan()
+                    stats['immich_scan_triggered'] = immich_success
+                    if immich_success:
+                        info(f"[green]✓[/green] Immich scan triggered")
+                    else:
+                        warning(f"Immich scan failed: {immich_msg}")
+
                 return stats
             except subprocess.CalledProcessError as e:
                 if method == "proxyjump":

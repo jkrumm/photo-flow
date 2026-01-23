@@ -14,7 +14,8 @@ setup(
         "Pillow>=11.2.1",
         "piexif>=1.1.3",
         "defusedxml>=0.7.1",
-        "rich>=13.7.0"
+        "rich>=13.7.0",
+        "python-dotenv>=1.0.0"
     ],
     entry_points={
         "console_scripts": [
