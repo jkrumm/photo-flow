@@ -16,9 +16,7 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 | Import Videos | Camera/*.MOV | SSD_PATH | ✅ Yes | ✅ Yes | System files |
 | Import Photos | Camera/*.JPG | STAGING_PATH | ✅ Yes | ✅ Yes | System files + already in Final |
 | Import RAWs | Camera/*.RAF | RAWS_PATH | ✅ Yes | ✅ Yes | System files |
-| Finalize | STAGING/*.JPG | FINAL_PATH | ✅ Yes | ✅ Yes | None |
-| Compress | FINAL/*.JPG | FINAL/*.JPG (in-place, 5200×3467, Q92, 4:4:4) | ❌ No (backup created) | ✅ Yes | None |
-| Copy to Camera | FINAL/*.JPG (compressed) | Camera/first subfolder | ❌ No | ✅ Yes | None |
+| Finalize | STAGING/*.JPG | FINAL_PATH (compress + move) | ✅ Yes | ✅ Yes | None |
 | Gallery Sync | FINAL/*.JPG (rating ≥ 4) | GALLERY_PATH/images | ❌ No | ✅ Yes | Rating-based |
 | Migrate | Any folder | Same folder (rename in-place) | ✅ Yes (atomic) | ✅ Yes | Already renamed |
 
@@ -287,11 +285,9 @@ StatusReport:
    - Delete from Staging (only if copy succeeded)
    - **Interrupt-safe**: Remaining files stay in Staging, retry processes them
    - **Output**: Progress bar for compression/move operations
-2. **Copy to camera**: Compressed JPGs → first available DCIM subfolder
-   - **Output**: Progress bar for camera copy operations
-3. **Delete camera RAWs**: Matching RAFs for finalized JPGs
+2. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
    - **Output**: Info messages for each deletion
-4. **Cleanup orphaned RAWs**: Local RAFs without matching Final JPG
+3. **Cleanup orphaned RAWs**: Local RAFs without matching Final JPG
    - **Output**: Info messages for cleanup operations
 
 **Returns:**
@@ -299,7 +295,6 @@ StatusReport:
 {
     'moved': int,                # JPGs moved from staging
     'compressed': int,           # JPGs compressed
-    'copied_to_camera': int,     # Compressed JPGs copied back
     'orphaned_raws': int,        # Local RAWs found without Final JPG
     'deleted_raws': int,         # Local orphaned RAWs deleted
     'deleted_camera_raws': int,  # Camera RAWs deleted
@@ -501,9 +496,9 @@ def photoflow()
 
 ### Smart Import Filtering
 **Location**: workflow.py:import_from_camera()
-**Logic**: Before importing JPGs from camera, check if they exist in FINAL_PATH
-**Reason**: Prevents re-importing finalized photos that were copied back to camera
-**Implementation**: Set comprehension with Final folder JPG names
+**Logic**: Content-based duplicate detection using file hashes
+**Reason**: Prevents re-importing photos that already exist in destination folders
+**Implementation**: Hash comparison for files with matching original base names
 
 ### Atomic Finalize Workflow (Critical Architecture)
 **Location**: workflow.py:finalize_staging() lines ~262-336
@@ -834,25 +829,20 @@ photoflow backup --dry-run
     │   (5200×3467, q=92, 4:4:4)│
     └────┬─────────────────┬───┘
          │                 │
-         │                 │ sync-gallery (rating ≥ 4)
+         │ backup          │ sync-gallery (rating ≥ 4)
          │                 │
          ▼                 ▼
-    ┌──────────┐    ┌─────────────────┐
-    │  Camera  │    │  photo_gallery/ │
-    │  (copy   │    │  ├── src/images │
-    │   back)  │    │  └── dist/      │
-    └──────────┘    └────────┬────────┘
-                             │ npm build + rsync
-                             ▼
-                    ┌──────────────────┐
-                    │  Remote Server   │
-                    │  Gallery Deploy  │
-                    └──────────────────┘
-
-    ┌──────────────────────────────────┐
-    │   Final/ → Homelab Backup        │
-    │   (rsync with IPv6/IPv4 fallback)│
-    └──────────────────────────────────┘
+    ┌──────────────┐    ┌─────────────────┐
+    │   Homelab    │    │  photo_gallery/ │
+    │   Backup     │    │  ├── src/images │
+    │   (rsync)    │    │  └── dist/      │
+    └──────────────┘    └────────┬────────┘
+                                 │ npm build + rsync
+                                 ▼
+                        ┌──────────────────┐
+                        │  Remote Server   │
+                        │  Gallery Deploy  │
+                        └──────────────────┘
 ```
 
 ---
@@ -876,7 +866,7 @@ State 2: IMPORTED
 ↓ photoflow finalize
 
 State 3: FINALIZED
-├── Camera: DSCF0430.JPG (compressed copy added back)
+├── Camera: (empty - files moved during import)
 ├── Staging: (empty)
 ├── RAWs: DSCF0430.RAF (kept)
 ├── Final: DSCF0430.JPG (compressed)
@@ -1021,7 +1011,7 @@ pipx uninstall photo-flow
 
 2. **Replaced Verbose Callbacks with Rich Progress** (all commands):
    - **import**: 60+ verbose lines → 1 clean progress bar
-   - **finalize**: 100+ verbose lines → 4 progress bars (compress, camera copy, RAW cleanup)
+   - **finalize**: 100+ verbose lines → 1 progress bar (compress + move) + info messages for RAW cleanup
    - **cleanup**: Verbose callbacks → progress bar for deletions
    - **sync-gallery**: 265+ verbose lines → 2 progress bars + 2 status spinners
    - **backup**: Verbose callbacks → Rich info/warning/error messages + rsync output

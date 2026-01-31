@@ -16,7 +16,7 @@ from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, 
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
-from photo_flow.console_utils import console, create_progress, show_status, info, warning
+from photo_flow.console_utils import console, create_progress, show_status, info, warning, error
 from photo_flow.immich_client import trigger_immich_scan
 from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, is_already_renamed
 
@@ -123,6 +123,11 @@ class PhotoWorkflow:
         """
         from photo_flow.console_utils import create_progress, info
 
+        # Check camera connection
+        if not CAMERA_PATH.exists():
+            warning(f"Camera not connected at {CAMERA_PATH} - nothing to import")
+            return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': 0, 'errors': 0}
+
         # Scan camera for files
         files = self.file_manager.scan_camera_files()
 
@@ -132,6 +137,12 @@ class PhotoWorkflow:
         jpg_files = files.get('.JPG', [])
         raf_files = files.get('.RAF', [])
         mov_files = files.get('.MOV', [])
+
+        # Check SSD connection for video import
+        ssd_connected = SSD_PATH.exists()
+        if mov_files and not ssd_connected:
+            warning(f"SSD not connected at {SSD_PATH} - skipping {len(mov_files)} video files")
+            mov_files = []
 
         # Process each file type with Rich Progress
         total_files = len(mov_files) + len(jpg_files) + len(raf_files)
@@ -233,8 +244,10 @@ class PhotoWorkflow:
                             try:
                                 file_path.unlink()
                             except Exception as e:
+                                error(f"Failed to delete original {file_path.name}: {e}")
                                 errors += 1
                     else:
+                        error(f"Failed to copy {file_path.name}: {copy_error}")
                         errors += 1
 
                 progress.advance(task)
@@ -318,6 +331,7 @@ class PhotoWorkflow:
                         )
 
                         if not compress_success:
+                            error(f"Failed to compress {staging_file.name}: {compress_error}")
                             stats['errors'] += 1
                             progress.advance(task)
                             continue
@@ -330,8 +344,10 @@ class PhotoWorkflow:
                                 stats['moved'] += 1
                                 stats['compressed'] += 1
                             except Exception as e:
+                                error(f"Failed to delete staging file {staging_file.name}: {e}")
                                 stats['errors'] += 1
                         else:
+                            error(f"Failed to copy {staging_file.name} to Final: {copy_error}")
                             stats['errors'] += 1
 
                     finally:
@@ -362,7 +378,8 @@ class PhotoWorkflow:
                         try:
                             raw_file.unlink()
                             stats['deleted_camera_raws'] += 1
-                        except Exception:
+                        except Exception as e:
+                            error(f"Failed to delete camera RAW {raw_file.name}: {e}")
                             stats['errors'] += 1
                     else:
                         stats['deleted_camera_raws'] += 1
@@ -384,7 +401,8 @@ class PhotoWorkflow:
                         try:
                             raw_file.unlink()
                             stats['deleted_raws'] += 1
-                        except Exception:
+                        except Exception as e:
+                            error(f"Failed to delete orphaned RAW {raw_file.name}: {e}")
                             stats['errors'] += 1
                 else:
                     stats['deleted_raws'] = len(orphaned_raws)
@@ -411,7 +429,11 @@ class PhotoWorkflow:
         }
 
         # Check if RAWs and Final folders exist
-        if not RAWS_PATH.exists() or not FINAL_PATH.exists():
+        if not RAWS_PATH.exists():
+            warning(f"RAWs folder not found at {RAWS_PATH} - nothing to clean up")
+            return stats
+        if not FINAL_PATH.exists():
+            warning(f"Final folder not found at {FINAL_PATH} - cannot determine orphaned RAWs")
             return stats
 
         info("Scanning for orphaned RAW files...")
@@ -448,7 +470,7 @@ class PhotoWorkflow:
                         raw_file.unlink()
                         stats['deleted'] += 1
                     except Exception as e:
-                        logger.error(f"Failed to delete {raw_file.name}: {e}")
+                        error(f"Failed to delete {raw_file.name}: {e}")
                         stats['errors'] += 1
 
                     progress.advance(task)
