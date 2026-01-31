@@ -20,6 +20,52 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 | Compress | FINAL/*.JPG | FINAL/*.JPG (in-place, 5200×3467, Q92, 4:4:4) | ❌ No (backup created) | ✅ Yes | None |
 | Copy to Camera | FINAL/*.JPG (compressed) | Camera/first subfolder | ❌ No | ✅ Yes | None |
 | Gallery Sync | FINAL/*.JPG (rating ≥ 4) | GALLERY_PATH/images | ❌ No | ✅ Yes | Rating-based |
+| Migrate | Any folder | Same folder (rename in-place) | ✅ Yes (atomic) | ✅ Yes | Already renamed |
+
+---
+
+## Timestamp-Based File Naming
+
+### Problem
+Fuji X-T4 uses DSCF numbering (0001-9999) which wraps after 10,000 photos. With all photos in a single Final folder, filename collisions occur.
+
+### Solution
+Files are renamed at import time to format: `YYYY-MM-DD_HH-MM-SS_<original_base>.<ext>`
+- Example: `2026-01-28_10-29-15_DSCF1234.JPG`
+- With collision (burst photos): `2026-01-28_10-29-15-2_DSCF1234.JPG`
+
+### Key Design Decisions
+
+1. **Rename at Import Time** (not Finalize)
+   - All file types (JPG, RAF, MOV) get consistent naming immediately
+   - `DateTimeOriginal` is immutable - editing/cropping doesn't affect it
+   - JPG and RAF share identical timestamps → correlation preserved
+
+2. **Original Base Preserved**
+   - `DSCF0430` stays in filename after timestamp prefix
+   - RAW-JPG correlation: `extract_original_base()` extracts `DSCF0430` from both formats
+   - Cleanup operations use original base for matching
+
+3. **Collision Handling**
+   - Counter suffix: `-2`, `-3`, etc. before the original base
+   - Example: `2026-01-28_10-29-15-2_DSCF1234.JPG`
+
+### Module: `timestamp_renamer.py`
+
+```python
+is_already_renamed(filename: str) -> bool
+  # Regex: ^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(-\d+)?_
+
+extract_original_base(filename: str) -> str
+  # "2026-01-28_10-29-15_DSCF0430.JPG" → "DSCF0430"
+
+get_timestamp_from_exif(file_path: Path) -> Optional[datetime]
+  # Uses exiftool -DateTimeOriginal (reliable, survives edits)
+
+generate_timestamped_filename(file_path: Path, existing_names: set) -> tuple[str, str]
+  # Returns (new_filename, error_message)
+  # Handles collisions with counter suffix
+```
 
 ---
 
@@ -401,7 +447,7 @@ def photoflow()
 | Command | Flag | Description | Output Style |
 |---------|------|-------------|--------------|
 | `photoflow status` | - | Check workflow status | Rich tables with color-coded status |
-| `photoflow import` | `--dry-run` | Import from camera | Progress updates + success/error + summary |
+| `photoflow import` | `--dry-run` | Import from camera (with timestamp rename) | Progress updates + success/error + summary |
 | `photoflow finalize` | `--dry-run` | Staging → Final → Camera → Cleanup | Progress updates + summary |
 | `photoflow cleanup` | `--dry-run` | Delete orphaned RAWs | Preview + confirmation + summary |
 | `photoflow sync-gallery` | `--dry-run` | High-rated photos to gallery | Progress updates + build/sync status + summary |
@@ -934,13 +980,36 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.2.0
+**Version**: 0.3.0
 **Last Updated**: January 2025
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.3.1 - Migration Cleanup (January 2025)
+**Removed one-time migration code after successful migration of all 7,633 files:**
+- Removed `photoflow migrate` CLI command
+- Removed `migrate_files_to_timestamp()` method from workflow.py
+- Deleted MIGRATION_TEST_PLAN.md (migration concluded 2026-01-31)
+
+### v0.3.0 - Timestamp-Based File Renaming (January 2025)
+**Prevents filename collisions when Fuji X-T4's DSCF counter wraps after 10,000 photos:**
+
+1. **New Naming Format**: Files renamed to `YYYY-MM-DD_HH-MM-SS_<original_base>.<ext>`
+   - Example: `2026-01-28_10-29-15_DSCF1234.JPG`
+   - Original base preserved for RAW-JPG correlation
+
+2. **New Module** (`timestamp_renamer.py`):
+   - `is_already_renamed()`: Regex detection of timestamp prefix
+   - `extract_original_base()`: Extract DSCF base from any filename format
+   - `generate_timestamped_filename()`: Generate new name with collision handling
+   - `get_timestamp_from_exif()`: Extract DateTimeOriginal via exiftool
+
+3. **Modified `workflow.py`**:
+   - `import_from_camera()`: Generates timestamp names at import time
+   - All RAW cleanup operations use `extract_original_base()` for correlation
 
 ### v0.2.0 - Output & UX Improvements (January 2025)
 **Major refactoring of CLI output from verbose callbacks to Rich Progress bars:**

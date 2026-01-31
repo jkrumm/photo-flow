@@ -18,6 +18,7 @@ from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
 from photo_flow.console_utils import console, create_progress, show_status, info, warning
 from photo_flow.immich_client import trigger_immich_scan
+from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, is_already_renamed
 
 logger = logging.getLogger(__name__)
 
@@ -125,30 +126,19 @@ class PhotoWorkflow:
         # Scan camera for files
         files = self.file_manager.scan_camera_files()
 
-        # Get finalized files to exclude from staging
-        final_jpg_bases = set()
-        if FINAL_PATH.exists():
-            final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-            final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
-
-        # Filter out finalized files
-        jpg_files = [jpg for jpg in files.get('.JPG', []) if jpg.stem not in final_jpg_bases]
-        raf_files = [raf for raf in files.get('.RAF', []) if raf.stem not in final_jpg_bases]
+        # Get all files from camera (no pre-filtering by DSCF base)
+        # With timestamp naming, counter wrap is handled: new DSCF0430 becomes 2026-01-30_..._DSCF0430.JPG
+        # Content-based duplicate check later catches actual duplicates (same file hash)
+        jpg_files = files.get('.JPG', [])
+        raf_files = files.get('.RAF', [])
         mov_files = files.get('.MOV', [])
-
-        # Count skipped finalized files
-        skipped_finalized = (len(files.get('.JPG', [])) - len(jpg_files) +
-                             len(files.get('.RAF', [])) - len(raf_files))
-
-        if skipped_finalized > 0:
-            info(f"Skipping {skipped_finalized} files already in Final folder")
 
         # Process each file type with Rich Progress
         total_files = len(mov_files) + len(jpg_files) + len(raf_files)
 
         if total_files == 0:
             info("No new files to import")
-            return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': skipped_finalized, 'errors': 0}
+            return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': 0, 'errors': 0}
 
         all_files = []
         file_destinations = []
@@ -178,6 +168,13 @@ class PhotoWorkflow:
         mov_skip = jpg_skip = raf_skip = 0
         errors = 0
 
+        # Track existing filenames per destination for collision detection
+        existing_names = {
+            SSD_PATH: {f.name for f in SSD_PATH.glob('*')} if SSD_PATH.exists() else set(),
+            STAGING_PATH: {f.name for f in STAGING_PATH.glob('*')} if STAGING_PATH.exists() else set(),
+            RAWS_PATH: {f.name for f in RAWS_PATH.glob('*')} if RAWS_PATH.exists() else set(),
+        }
+
         with create_progress() as progress:
             task = progress.add_task(
                 f"[cyan]Importing {total_files} files from camera",
@@ -185,6 +182,11 @@ class PhotoWorkflow:
             )
 
             for file_path, dest, ftype, should_delete in zip(all_files, file_destinations, file_types, delete_flags):
+                # Generate timestamped filename
+                new_filename, ts_error = generate_timestamped_filename(file_path, existing_names[dest])
+                if ts_error:
+                    logger.warning(f"Using original name: {ts_error}")
+
                 if dry_run:
                     if ftype == "video":
                         mov_count += 1
@@ -192,19 +194,24 @@ class PhotoWorkflow:
                         jpg_count += 1
                     else:
                         raf_count += 1
+                    existing_names[dest].add(new_filename)
                     progress.advance(task)
                     continue
 
-                dst_path = dest / file_path.name
+                dst_path = dest / new_filename
 
-                # Check for duplicates
-                is_dup, error = self.file_manager.is_duplicate(file_path, dst_path)
-                if error:
-                    errors += 1
-                    progress.advance(task)
-                    continue
+                # Check for duplicates (by content, not just name)
+                # First check if a file with the original base exists
+                is_dup = False
+                orig_base = extract_original_base(file_path.name)
+                for existing in dest.glob('*'):
+                    if extract_original_base(existing.name) == orig_base:
+                        dup_check, _ = self.file_manager.is_duplicate(file_path, existing)
+                        if dup_check:
+                            is_dup = True
+                            break
 
-                if dst_path.exists() and is_dup:
+                if is_dup:
                     if ftype == "video":
                         mov_skip += 1
                     elif ftype == "photo":
@@ -212,8 +219,9 @@ class PhotoWorkflow:
                     else:
                         raf_skip += 1
                 else:
-                    success, error = self.file_manager.safe_copy(file_path, dst_path)
-                    if success:
+                    copy_success, copy_error = self.file_manager.safe_copy(file_path, dst_path)
+                    if copy_success:
+                        existing_names[dest].add(new_filename)
                         if ftype == "video":
                             mov_count += 1
                         elif ftype == "photo":
@@ -235,14 +243,14 @@ class PhotoWorkflow:
             'videos': mov_count,
             'photos': jpg_count,
             'raws': raf_count,
-            'skipped': mov_skip + jpg_skip + raf_skip + skipped_finalized,
+            'skipped': mov_skip + jpg_skip + raf_skip,
             'errors': errors
         }
 
     def finalize_staging(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
         """
-        Finalize the staging process by moving approved photos to the final folder,
-        copying them back to the camera for viewing, and cleaning up orphaned RAW files.
+        Finalize the staging process by moving approved photos to the final folder
+        and cleaning up orphaned RAW files.
 
         Args:
             dry_run (bool): If True, only simulate the finalization without moving files
@@ -256,7 +264,6 @@ class PhotoWorkflow:
         stats = {
             'moved': 0,
             'compressed': 0,
-            'copied_to_camera': 0,
             'orphaned_raws': 0,
             'deleted_raws': 0,
             'deleted_camera_raws': 0,
@@ -336,52 +343,17 @@ class PhotoWorkflow:
 
                 progress.advance(task)
 
-        # Step 2: Copy finalized files back to camera
-        if CAMERA_PATH.exists():
-            final_files = scan_for_images(FINAL_PATH, '.JPG')
-            camera_folders = [folder for folder in CAMERA_PATH.glob('*_*') if folder.is_dir()]
-
-            if camera_folders and final_files:
-                camera_folder = camera_folders[0]
-                info(f"Copying to camera folder: {camera_folder.name}")
-
-                with create_progress() as progress:
-                    task = progress.add_task(
-                        f"[cyan]Copying {len(final_files)} photos to camera",
-                        total=len(final_files)
-                    )
-
-                    for file_path in final_files:
-                        dst_path = camera_folder / file_path.name
-                        is_dup, _ = self.file_manager.is_duplicate(file_path, dst_path)
-
-                        if dst_path.exists() and is_dup:
-                            stats['skipped'] += 1
-                        elif not dry_run:
-                            success, _ = self.file_manager.safe_copy(file_path, dst_path)
-                            if success:
-                                stats['copied_to_camera'] += 1
-                            else:
-                                stats['errors'] += 1
-                        else:
-                            stats['copied_to_camera'] += 1
-
-                        progress.advance(task)
-            elif not camera_folders:
-                info("No camera folders found - skipping copy to camera")
-        else:
-            info("Camera not connected - skipping copy to camera")
-
-        # Step 3: Delete RAW files from camera for finalized images
+        # Step 2: Delete RAW files from camera for finalized images
         # Note: RAW files are now deleted during import, so this will typically find nothing.
         # Kept for backwards compatibility in case RAWs are manually added to camera.
         if CAMERA_PATH.exists() and FINAL_PATH.exists():
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-            final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+            # Use extract_original_base to handle both old and timestamp-renamed files
+            final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
 
             camera_files = self.file_manager.scan_camera_files()
             camera_raws = camera_files.get('.RAF', [])
-            finalized_raws = [raw for raw in camera_raws if raw.stem in final_jpg_bases]
+            finalized_raws = [raw for raw in camera_raws if extract_original_base(raw.name) in final_jpg_bases]
 
             if finalized_raws:
                 info(f"Deleting {len(finalized_raws)} RAW files from camera")
@@ -398,9 +370,10 @@ class PhotoWorkflow:
         # Step 4: Clean up orphaned local RAW files
         if RAWS_PATH.exists() and FINAL_PATH.exists():
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-            final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+            # Use extract_original_base to handle both old and timestamp-renamed files
+            final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
             raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
-            orphaned_raws = [raw_file for raw_file in raw_files if raw_file.stem not in final_jpg_bases]
+            orphaned_raws = [raw_file for raw_file in raw_files if extract_original_base(raw_file.name) not in final_jpg_bases]
 
             stats['orphaned_raws'] = len(orphaned_raws)
 
@@ -446,15 +419,16 @@ class PhotoWorkflow:
         # Get all JPGs in the final folder
         final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
 
-        # Extract base filenames (without extension) from final JPGs
-        final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
+        # Extract original base filenames from final JPGs (handles both old and timestamp-renamed files)
+        final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
 
         # Get all RAFs in the RAWs folder
         raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
 
         # Find orphaned RAWs (those without a corresponding JPG in final)
+        # Compare using original base to handle timestamp-renamed files
         orphaned_raws = [raw_file for raw_file in raw_files
-                         if raw_file.stem not in final_jpg_bases]
+                         if extract_original_base(raw_file.name) not in final_jpg_bases]
 
         # Count orphaned RAWs
         stats['orphaned'] = len(orphaned_raws)
@@ -501,24 +475,11 @@ class PhotoWorkflow:
             report.staging_files = len(scan_for_images(STAGING_PATH, '.JPG'))
 
         # Count pending files on camera (if connected)
+        # All files on camera are pending - no copy-back means camera only has new photos
         if report.camera_connected:
             files = self.file_manager.scan_camera_files()
             report.pending_videos = len(files.get('.MOV', []))
-
-            # For JPGs, we need to exclude those that are already in the Final folder
-            # (these are the ones that were copied back to the camera during finalization)
-            camera_jpgs = files.get('.JPG', [])
-
-            # Get a list of JPGs in the Final folder (if it exists)
-            final_jpg_bases = set()
-            if FINAL_PATH.exists():
-                final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-                final_jpg_bases = {jpg_file.stem for jpg_file in final_jpgs}
-
-            # Filter out JPGs that are already in the Final folder
-            pending_jpgs = [jpg for jpg in camera_jpgs if jpg.stem not in final_jpg_bases]
-            report.pending_photos = len(pending_jpgs)
-
+            report.pending_photos = len(files.get('.JPG', []))
             report.pending_raws = len(files.get('.RAF', []))
 
         return report

@@ -96,7 +96,7 @@ def import_cmd(dry_run):
 @photoflow.command()
 @click.option('--dry-run', is_flag=True, help='Simulate finalization without moving files')
 def finalize(dry_run):
-    """Finalize the staging process by moving approved photos to the final folder, copying them back to camera, and cleaning up orphaned RAW files."""
+    """Finalize the staging process by moving approved photos to the final folder and cleaning up orphaned RAW files."""
     workflow = PhotoWorkflow()
 
     if dry_run:
@@ -114,7 +114,6 @@ def finalize(dry_run):
     print_summary("Finalization Results", {
         "Files moved to Final folder": stats['moved'],
         "Files compressed (5200×3467, Q92, 4:4:4)": stats.get('compressed', 0),
-        "Files copied back to camera": stats['copied_to_camera'],
         "Orphaned RAW files found": stats['orphaned_raws'],
         "Orphaned RAW files deleted": stats['deleted_raws'],
         "RAW files deleted from camera": stats['deleted_camera_raws'],
