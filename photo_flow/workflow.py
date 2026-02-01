@@ -87,8 +87,14 @@ class PhotoWorkflow:
 
             if dst_path.exists() and is_dup:
                 stats['skipped'] += 1
-                if progress_callback:
-                    progress_callback(f"Skipping {file_type} {file_path.name} (already exists)")
+                # Delete from camera since verified backup exists
+                if delete_original:
+                    try:
+                        file_path.unlink()
+                    except Exception as e:
+                        stats['errors'] += 1
+                        if progress_callback:
+                            progress_callback(f"ERROR: Failed to delete duplicate original {file_path}: {str(e)}")
             else:
                 success, error = self.file_manager.safe_copy(file_path, dst_path)
                 if success:
@@ -229,6 +235,13 @@ class PhotoWorkflow:
                         jpg_skip += 1
                     else:
                         raf_skip += 1
+                    # Delete from camera since verified backup exists
+                    if should_delete:
+                        try:
+                            file_path.unlink()
+                        except Exception as e:
+                            error(f"Failed to delete duplicate {file_path.name}: {e}")
+                            errors += 1
                 else:
                     copy_success, copy_error = self.file_manager.safe_copy(file_path, dst_path)
                     if copy_success:
