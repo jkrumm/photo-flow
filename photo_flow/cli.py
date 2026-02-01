@@ -204,37 +204,155 @@ def cleanup(dry_run):
 @photoflow.command(name='backup')
 @click.option('--dry-run', is_flag=True, help='Simulate backup without transferring files')
 def backup(dry_run):
-    """Backup the Final folder to homelab via rsync."""
+    """Backup photos, RAWs, and videos to homelab via rsync with interactive selection."""
+    from rich.panel import Panel
+    from photo_flow.console_utils import show_status
+
     workflow = PhotoWorkflow()
 
+    # Get backup availability with remote check
+    with show_status("Checking homelab connection...", spinner="dots"):
+        availability = workflow.get_backup_availability(check_remote=True)
+
+    connection = availability.pop('_connection', None)
+
+    # Build status display
+    status_lines = []
+    for key, info_data in availability.items():
+        if info_data['available']:
+            local = info_data['local_count']
+            remote = info_data.get('remote_count', -1)
+            needs = info_data.get('needs_sync', -1)
+
+            if remote >= 0:
+                if needs > 0:
+                    status_lines.append(
+                        f"  [yellow]![/yellow] {key.upper():8s} {local:,} local │ {remote:,} remote │ [yellow]{needs:,} to sync[/yellow]"
+                    )
+                else:
+                    status_lines.append(
+                        f"  [green]✓[/green] {key.upper():8s} {local:,} local │ {remote:,} remote │ [green]synced[/green]"
+                    )
+            else:
+                status_lines.append(f"  [green]✓[/green] {key.upper():8s} {local:,} files ready")
+        else:
+            requires = info_data.get('requires', 'Unknown')
+            status_lines.append(f"  [red]✗[/red] {key.upper():8s} {requires} not connected")
+
+    status_text = "\n".join(status_lines)
+    title = "Backup Status"
+    if connection:
+        method_desc = "IPv6" if connection == "direct" else "IPv4 via VPS"
+        title += f" [dim]({method_desc})[/dim]"
+    console.print(Panel(status_text, title=title, border_style="cyan"))
+
+    # Build menu options based on availability
+    available_sources = [k for k, v in availability.items() if v['available']]
+
+    if not available_sources:
+        error("No backup sources available. Connect required drives and try again.")
+        return
+
+    # Menu options
+    options = []
+
+    # Option 1: All available
+    if len(available_sources) > 1:
+        all_desc = " → ".join([s.upper() for s in ['final', 'raws', 'videos'] if s in available_sources])
+        options.append(('all', f"All available ({all_desc})"))
+
+    # Individual options
+    for source in ['final', 'raws', 'videos']:
+        avail = availability[source]
+        if avail['available']:
+            label = {'final': 'JPEGs only (Final folder)', 'raws': 'RAWs only', 'videos': 'Videos only'}[source]
+            options.append((source, label))
+        else:
+            requires = avail.get('requires', 'Unknown')
+            label = {'final': 'JPEGs', 'raws': 'RAWs', 'videos': 'Videos'}[source]
+            options.append((None, f"{label} (unavailable - {requires} not connected)"))
+
+    # Display menu
+    console.print("\n[bold]Select what to backup:[/bold]")
+    for i, (key, label) in enumerate(options, 1):
+        if key is None:
+            console.print(f"  [dim]{i}. {label}[/dim]")
+        else:
+            console.print(f"  {i}. {label}")
+
+    # Get user choice
+    console.print()
+    try:
+        choice = click.prompt("Enter choice", type=int, default=1)
+    except click.Abort:
+        console.print("\n[yellow]Aborted.[/yellow]")
+        return
+
+    if choice < 1 or choice > len(options):
+        error(f"Invalid choice: {choice}")
+        return
+
+    selected_key, selected_label = options[choice - 1]
+
+    if selected_key is None:
+        error("Selected source is not available. Connect required drives and try again.")
+        return
+
+    console.print()
     if dry_run:
         info("[yellow]DRY RUN:[/yellow] Simulating backup to homelab (no remote changes)")
 
-    # Call backup_final_to_homelab (uses Rich console internally, rsync output flows through)
-    stats = workflow.backup_final_to_homelab(dry_run=dry_run)
-
-    # Print summary
-    if stats.get('sync_successful'):
-        success("Backup completed successfully!")
-    elif stats.get('errors', 0) > 0:
-        error(f"Backup failed with {stats['errors']} errors")
-
-    results = {
-        "Files scanned in Final": stats.get('scanned', 0)
-    }
-
-    if not dry_run:
-        results["Backup successful"] = "Yes" if stats.get('sync_successful') else "No"
-        if stats.get('connection_method'):
-            method_desc = "direct IPv6" if stats['connection_method'] == "direct" else "ProxyJump via VPS (IPv4)"
-            results["Connection method"] = method_desc
+    # Determine which sources to backup
+    if selected_key == 'all':
+        sources_to_backup = [s for s in ['final', 'raws', 'videos'] if s in available_sources]
     else:
-        results["Backup status"] = "Would be performed (dry run)"
+        sources_to_backup = [selected_key]
 
-    if stats.get('errors', 0) > 0:
-        results["Errors encountered"] = stats['errors']
+    # Run backups in order
+    all_stats = []
+    total_errors = 0
 
-    print_summary("Backup Results", results)
+    for source in sources_to_backup:
+        console.print(f"\n[bold cyan]Backing up {source.upper()}...[/bold cyan]")
+
+        if source == 'final':
+            stats = workflow.backup_final_to_homelab(dry_run=dry_run)
+        elif source == 'raws':
+            stats = workflow.backup_raws_to_homelab(dry_run=dry_run)
+        elif source == 'videos':
+            stats = workflow.backup_videos_to_homelab(dry_run=dry_run)
+
+        all_stats.append(stats)
+        total_errors += stats.get('errors', 0)
+
+    # Print summary for each backup
+    console.print()
+    for stats in all_stats:
+        source = stats.get('source', 'unknown')
+        results = {
+            f"Files scanned in {source.title()}": stats.get('scanned', 0)
+        }
+
+        if not dry_run:
+            results["Backup successful"] = "Yes" if stats.get('sync_successful') else "No"
+            if stats.get('connection_method'):
+                method_desc = "direct IPv6" if stats['connection_method'] == "direct" else "ProxyJump via VPS (IPv4)"
+                results["Connection method"] = method_desc
+            if stats.get('trash_path'):
+                results["Trash location"] = stats['trash_path']
+        else:
+            results["Backup status"] = "Would be performed (dry run)"
+
+        if stats.get('errors', 0) > 0:
+            results["Errors encountered"] = stats['errors']
+
+        print_summary(f"{source.title()} Backup Results", results)
+
+    # Final status
+    if total_errors == 0:
+        success("All backups completed successfully!")
+    else:
+        error(f"Backups completed with {total_errors} total errors")
 
 
 if __name__ == '__main__':

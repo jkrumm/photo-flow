@@ -17,7 +17,15 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 # Remote backup (homelab) settings
 HOMELAB_USER = "jkrumm"
 HOMELAB_HOST = "homelab.jkrumm.com"
-HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+# SSD backup path (for Final JPEGs - fast access)
+HOMELAB_SSD_FINAL_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+# HDD backup paths (for large files - RAWs and Videos)
+HOMELAB_HDD_RAWS_PATH = Path("/mnt/hdd/fuji/RAWs")
+HOMELAB_HDD_VIDEOS_PATH = Path("/mnt/hdd/fuji/Videos")
+# Trash folder for deleted files (instead of permanent delete)
+HOMELAB_TRASH_PATH = Path("/mnt/hdd/fuji/.trash")
+# Legacy alias for backwards compatibility
+HOMELAB_DEST_PATH = HOMELAB_SSD_FINAL_PATH
 # Jump host for IPv4-only networks (auto-fallback if direct IPv6 fails)
 HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 address
 HOMELAB_JUMP_USER = "jkrumm"

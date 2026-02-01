@@ -12,7 +12,12 @@ from pathlib import Path
 import subprocess
 from typing import Dict, List
 
-from photo_flow.config import CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH, HOMELAB_USER, HOMELAB_HOST, HOMELAB_DEST_PATH, RSYNC_FLAGS, RSYNC_EXCLUDE_PATTERNS, RSYNC_SSH_BASE, RSYNC_SSH_JUMP
+from photo_flow.config import (
+    CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
+    HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
+    HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
+    RSYNC_SSH_BASE, RSYNC_SSH_JUMP
+)
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
@@ -785,35 +790,183 @@ class PhotoWorkflow:
 
         return stats
 
-    def backup_final_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+    def backup_final_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
         """
         Backup the Final folder to the homelab server via rsync.
 
-        Uses rsync for safe, interruptible syncing. In dry-run mode, no changes
-        are made on the remote side and rsync runs with -n.
+        Uses rsync for safe, interruptible syncing with trash-based deletion
+        (deleted/replaced files are moved to a timestamped trash folder instead
+        of being permanently deleted).
 
         Automatically tries direct connection first (IPv6), then falls back to
         ProxyJump via VPS if direct connection fails (IPv4-only networks).
 
         Args:
             dry_run (bool): If True, only simulate the backup without syncing
-            progress_callback (callable): Optional callback function for progress updates (DEPRECATED - not used)
+            progress_callback (callable): Deprecated, not used
 
         Returns:
-            Dict with keys: 'scanned', 'sync_successful' (bool), 'errors' (int), 'connection_method' (str)
+            Dict with keys: 'source', 'scanned', 'sync_successful', 'connection_method', 'trash_path', 'errors'
         """
+        from photo_flow.console_utils import info, warning
+
+        stats = self._run_backup_rsync(
+            source_path=FINAL_PATH,
+            remote_dest=HOMELAB_SSD_FINAL_PATH,
+            source_name='final',
+            dry_run=dry_run,
+            min_files=100,
+            file_pattern='*.JPG'
+        )
+
+        # Trigger Immich library scan after successful backup
+        if stats['sync_successful'] and not dry_run:
+            info("Triggering Immich library scan...")
+            immich_success, immich_msg = trigger_immich_scan()
+            stats['immich_scan_triggered'] = immich_success
+            if immich_success:
+                info(f"[green]✓[/green] Immich scan triggered")
+            else:
+                warning(f"Immich scan failed: {immich_msg}")
+
+        return stats
+
+    def _get_remote_file_count(self, remote_path: Path, extension: str) -> tuple[int, str]:
+        """
+        Get file count from remote homelab directory via SSH.
+
+        Tries direct connection first, then ProxyJump fallback.
+
+        Args:
+            remote_path: Remote directory path
+            extension: File extension to count (e.g., '*.JPG')
+
+        Returns:
+            Tuple of (count, connection_method) or (-1, error_message) on failure
+        """
+        ssh_configs = [
+            ("direct", RSYNC_SSH_BASE),
+            ("proxyjump", RSYNC_SSH_JUMP)
+        ]
+
+        for method, ssh_cmd in ssh_configs:
+            try:
+                # Build SSH command to count files
+                remote = f"{HOMELAB_USER}@{HOMELAB_HOST}"
+                count_cmd = f"find {remote_path} -maxdepth 1 -name '{extension}' 2>/dev/null | wc -l"
+
+                result = subprocess.run(
+                    ["ssh"] + ssh_cmd.split()[1:] + [remote, count_cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode == 0:
+                    count = int(result.stdout.strip())
+                    return (count, method)
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
+                continue
+
+        return (-1, "connection failed")
+
+    def get_backup_availability(self, check_remote: bool = False) -> Dict[str, Dict]:
+        """
+        Check which backup sources are available and optionally compare with remote.
+
+        Args:
+            check_remote: If True, SSH to homelab to get remote file counts
+
+        Returns:
+            Dict with availability info for each backup source:
+            {
+                'final': {'available': bool, 'path': Path, 'local_count': int, 'remote_count': int, 'needs_sync': int},
+                ...
+            }
+        """
+        result = {
+            'final': {
+                'available': FINAL_PATH.exists(),
+                'path': FINAL_PATH,
+                'remote_path': HOMELAB_SSD_FINAL_PATH,
+                'local_count': len(list(FINAL_PATH.glob('*.JPG'))) if FINAL_PATH.exists() else 0,
+                'extension': '*.JPG',
+            },
+            'raws': {
+                'available': RAWS_PATH.exists(),
+                'path': RAWS_PATH,
+                'remote_path': HOMELAB_HDD_RAWS_PATH,
+                'local_count': len(list(RAWS_PATH.glob('*.RAF'))) if RAWS_PATH.exists() else 0,
+                'extension': '*.RAF',
+                'requires': 'External SSD',
+            },
+            'videos': {
+                'available': SSD_PATH.exists(),
+                'path': SSD_PATH,
+                'remote_path': HOMELAB_HDD_VIDEOS_PATH,
+                'local_count': len(list(SSD_PATH.glob('*.MOV'))) if SSD_PATH.exists() else 0,
+                'extension': '*.MOV',
+                'requires': 'External SSD',
+            },
+        }
+
+        if check_remote:
+            connection_method = None
+            for key, info in result.items():
+                remote_count, method = self._get_remote_file_count(
+                    info['remote_path'],
+                    info['extension']
+                )
+                info['remote_count'] = remote_count
+                info['needs_sync'] = max(0, info['local_count'] - remote_count) if remote_count >= 0 else -1
+                if remote_count >= 0:
+                    connection_method = method
+
+            result['_connection'] = connection_method
+
+        return result
+
+    def _run_backup_rsync(
+        self,
+        source_path: Path,
+        remote_dest: Path,
+        source_name: str,
+        dry_run: bool = False,
+        min_files: int = 0,
+        file_pattern: str = '*'
+    ) -> Dict[str, any]:
+        """
+        Internal helper to run rsync backup with trash-based deletion.
+
+        Instead of --delete (permanent), uses --backup --backup-dir to move
+        deleted/replaced files to a timestamped trash folder.
+
+        Args:
+            source_path: Local source directory
+            remote_dest: Remote destination path
+            source_name: Name for trash folder (e.g., 'final', 'raws', 'videos')
+            dry_run: If True, simulate only
+            min_files: Minimum files required (safety check)
+            file_pattern: Glob pattern to count files
+
+        Returns:
+            Dict with 'scanned', 'sync_successful', 'connection_method', 'trash_path', 'errors'
+        """
+        from datetime import datetime
         from photo_flow.console_utils import info, error as print_error, warning
 
         stats = {
+            'source': source_name,
             'scanned': 0,
             'sync_successful': False,
-            'errors': 0,
             'connection_method': None,
+            'trash_path': None,
+            'errors': 0,
         }
 
         # Pre-checks
-        if not FINAL_PATH.exists():
-            print_error("Final folder does not exist. Nothing to backup.")
+        if not source_path.exists():
+            print_error(f"Source folder does not exist: {source_path}")
             return stats
 
         if shutil.which("rsync") is None:
@@ -821,26 +974,30 @@ class PhotoWorkflow:
             stats['errors'] += 1
             return stats
 
-        # Count JPGs (informational and safety check)
+        # Count files
         try:
-            jpgs = scan_for_images(FINAL_PATH, '.JPG')
-            stats['scanned'] = len(jpgs)
+            files = list(source_path.glob(file_pattern))
+            stats['scanned'] = len(files)
 
-            # Safety check: Ensure Final folder has a reasonable number of files
-            # This prevents accidentally wiping the backup if Final is empty or unmounted
-            if len(jpgs) < 100:
-                warning(f"Final folder only has {len(jpgs)} files. Expected 1000+.")
-                warning("This could indicate Final folder is empty or unmounted.")
+            # Safety check
+            if min_files > 0 and len(files) < min_files:
+                warning(f"{source_name.title()} folder only has {len(files)} files. Expected {min_files}+.")
+                warning("This could indicate folder is empty or unmounted.")
                 warning("Backup aborted to prevent accidental deletion of remote files.")
                 stats['errors'] += 1
                 return stats
         except Exception as e:
-            print_error(f"Failed to scan Final folder: {e}")
+            print_error(f"Failed to scan {source_name} folder: {e}")
             stats['errors'] += 1
             return stats
 
-        remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(HOMELAB_DEST_PATH)}"
-        src = f"{str(FINAL_PATH)}/"  # trailing slash = sync contents
+        # Generate timestamped trash folder name
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        trash_folder = f"{HOMELAB_TRASH_PATH}/{source_name}_{timestamp}"
+        stats['trash_path'] = trash_folder
+
+        remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(remote_dest)}"
+        src = f"{str(source_path)}/"  # trailing slash = sync contents
 
         # Try direct connection first (IPv6), then fall back to ProxyJump (IPv4)
         ssh_configs = [
@@ -849,9 +1006,10 @@ class PhotoWorkflow:
         ]
 
         for method, ssh_cmd in ssh_configs:
-            # Build rsync command
-            cmd = ["rsync"]
-            cmd.extend(RSYNC_FLAGS)
+            # Build rsync command with trash-based deletion
+            cmd = ["rsync", "-av", "--partial", "--whole-file", "--progress"]
+            # Use --backup --backup-dir instead of --delete
+            cmd.extend(["--backup", f"--backup-dir={trash_folder}"])
             # Add exclusion patterns for system files
             for pattern in RSYNC_EXCLUDE_PATTERNS:
                 cmd.extend(["--exclude", pattern])
@@ -867,23 +1025,12 @@ class PhotoWorkflow:
                 info("Trying ProxyJump via VPS (IPv4)...")
 
             try:
-                # Let rsync progress output flow to terminal (don't capture stderr)
+                # Let rsync progress output flow to terminal
                 subprocess.run(cmd, check=True)
                 stats['sync_successful'] = True
                 stats['connection_method'] = method
                 method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
-                info(f"[green]✓[/green] Backup completed successfully using {method_desc}")
-
-                # Trigger Immich library scan after successful backup
-                if not dry_run:
-                    info("Triggering Immich library scan...")
-                    immich_success, immich_msg = trigger_immich_scan()
-                    stats['immich_scan_triggered'] = immich_success
-                    if immich_success:
-                        info(f"[green]✓[/green] Immich scan triggered")
-                    else:
-                        warning(f"Immich scan failed: {immich_msg}")
-
+                info(f"[green]✓[/green] {source_name.title()} backup completed successfully using {method_desc}")
                 return stats
             except subprocess.CalledProcessError as e:
                 if method == "proxyjump":
@@ -893,3 +1040,59 @@ class PhotoWorkflow:
                 # Continue to next method
 
         return stats
+
+    def backup_raws_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
+        """
+        Backup the RAWs folder to homelab HDD via rsync.
+
+        Args:
+            dry_run: If True, simulate only
+            progress_callback: Deprecated, not used
+
+        Returns:
+            Dict with backup stats
+        """
+        from photo_flow.console_utils import error as print_error
+
+        # Check SSD connection (RAWs are on external drive)
+        if not RAWS_PATH.exists():
+            print_error(f"RAWs folder not available at {RAWS_PATH}")
+            print_error("External SSD must be connected for RAWs backup")
+            return {'source': 'raws', 'scanned': 0, 'sync_successful': False, 'errors': 1}
+
+        return self._run_backup_rsync(
+            source_path=RAWS_PATH,
+            remote_dest=HOMELAB_HDD_RAWS_PATH,
+            source_name='raws',
+            dry_run=dry_run,
+            min_files=100,
+            file_pattern='*.RAF'
+        )
+
+    def backup_videos_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
+        """
+        Backup the Videos folder to homelab HDD via rsync.
+
+        Args:
+            dry_run: If True, simulate only
+            progress_callback: Deprecated, not used
+
+        Returns:
+            Dict with backup stats
+        """
+        from photo_flow.console_utils import error as print_error
+
+        # Check SSD connection (Videos are on external drive)
+        if not SSD_PATH.exists():
+            print_error(f"Videos folder not available at {SSD_PATH}")
+            print_error("External SSD must be connected for Videos backup")
+            return {'source': 'videos', 'scanned': 0, 'sync_successful': False, 'errors': 1}
+
+        return self._run_backup_rsync(
+            source_path=SSD_PATH,
+            remote_dest=HOMELAB_HDD_VIDEOS_PATH,
+            source_name='videos',
+            dry_run=dry_run,
+            min_files=10,
+            file_pattern='*.MOV'
+        )
