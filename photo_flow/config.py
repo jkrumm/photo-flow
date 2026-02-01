@@ -9,7 +9,7 @@ from pathlib import Path
 # File paths
 CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
-RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
+RAWS_PATH = Path("/Volumes/EXT/Bilder/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")

@@ -15,7 +15,7 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 |-----------|--------|-------------|-----------------|-------------|--------|
 | Import Videos | Camera/*.MOV | SSD_PATH | ✅ Yes | ✅ Yes | System files |
 | Import Photos | Camera/*.JPG | STAGING_PATH | ✅ Yes | ✅ Yes | System files + already in Final |
-| Import RAWs | Camera/*.RAF | RAWS_PATH | ✅ Yes | ✅ Yes | System files |
+| Import RAWs | Camera/*.RAF | RAWS_PATH (SSD) | ✅ Yes | ✅ Yes | System files |
 | Finalize | STAGING/*.JPG | FINAL_PATH (compress + move) | ✅ Yes | ✅ Yes | None |
 | Gallery Sync | FINAL/*.JPG (rating ≥ 4) | GALLERY_PATH/images | ❌ No | ✅ Yes | Rating-based |
 | Migrate | Any folder | Same folder (rename in-place) | ✅ Yes (atomic) | ✅ Yes | Already renamed |
@@ -73,7 +73,7 @@ generate_timestamped_filename(file_path: Path, existing_names: set) -> tuple[str
 ```python
 CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
-RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
+RAWS_PATH = Path("/Volumes/EXT/Bilder/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
@@ -977,6 +977,13 @@ pipx uninstall photo-flow
 ---
 
 ## Recent Changes
+
+### v0.3.2 - RAW Storage Migration to External Drive (February 2025)
+**Moves RAW storage from laptop to external SSD to free local disk space:**
+
+1. **Changed RAWS_PATH**: `~/Pictures/RAWs` → `/Volumes/EXT/Bilder/RAWs`
+2. **Added SSD connection checks**: RAW import and cleanup skip gracefully when SSD disconnected
+3. **Migrated 2,890 existing RAW files** via rsync with verification
 
 ### v0.3.1 - Migration Cleanup (January 2025)
 **Removed one-time migration code after successful migration of all 7,633 files:**

@@ -152,7 +152,7 @@ from pathlib import Path
 
 CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
-RAWS_PATH = Path("/Users/johannes.krumm/Pictures/RAWs")
+RAWS_PATH = Path("/Volumes/EXT/Bilder/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
@@ -222,12 +222,12 @@ Camera (after import):
 Local:
 Pictures/
 ├── Staging/          # DSCF0430.JPG (moved from camera)
-├── Final/            # Final approved photos → upload to immich
-└── RAWs/             # DSCF0430.RAF (backup)
+└── Final/            # Final approved photos → upload to immich
 
 External SSD:
-/Volumes/EXT/Videos/Videos/
-└── DSCF1451.MOV  # Moved from camera
+/Volumes/EXT/
+├── Videos/Videos/    # DSCF1451.MOV (moved from camera)
+└── Bilder/RAWs/      # DSCF0430.RAF (backup)
 
 Gallery workspace:
 /Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/

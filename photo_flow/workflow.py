@@ -150,6 +150,11 @@ class PhotoWorkflow:
             warning(f"SSD not connected at {SSD_PATH} - skipping {len(mov_files)} video files")
             mov_files = []
 
+        # Check SSD connection for RAW import (RAWs stored on external drive)
+        if raf_files and not ssd_connected:
+            warning(f"SSD not connected - skipping {len(raf_files)} RAW files")
+            raf_files = []
+
         # Process each file type with Rich Progress
         total_files = len(mov_files) + len(jpg_files) + len(raf_files)
 
@@ -440,6 +445,11 @@ class PhotoWorkflow:
             'deleted': 0,
             'errors': 0
         }
+
+        # Check SSD connection (RAWs stored on external drive)
+        if not SSD_PATH.exists():
+            warning("External SSD not connected - RAWs folder unavailable")
+            return stats
 
         # Check if RAWs and Final folders exist
         if not RAWS_PATH.exists():
