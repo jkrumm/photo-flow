@@ -926,6 +926,20 @@ class PhotoWorkflow:
 
         return result
 
+    def _get_rsync_version(self) -> tuple[int, int, int]:
+        """Get rsync version as tuple (major, minor, patch). Returns (0, 0, 0) on error."""
+        import re
+        try:
+            result = subprocess.run(["rsync", "--version"], capture_output=True, text=True)
+            # Parse "rsync  version 3.2.7" or "rsync version 2.6.9"
+            match = re.search(r'version (\d+)\.(\d+)\.?(\d*)', result.stdout)
+            if match:
+                major, minor, patch = match.groups()
+                return (int(major), int(minor), int(patch) if patch else 0)
+        except Exception:
+            pass
+        return (0, 0, 0)
+
     def _run_backup_rsync(
         self,
         source_path: Path,
@@ -936,10 +950,14 @@ class PhotoWorkflow:
         file_pattern: str = '*'
     ) -> Dict[str, any]:
         """
-        Internal helper to run rsync backup with trash-based deletion.
+        Internal helper to run rsync backup with trash-based deletion and Rich Progress.
 
         Instead of --delete (permanent), uses --backup --backup-dir to move
         deleted/replaced files to a timestamped trash folder.
+
+        Automatically detects rsync version and uses appropriate progress display:
+        - rsync >= 3.1.0: Uses --info=progress2 for overall progress
+        - rsync < 3.1.0: Uses --progress and parses to-chk=X/Y for progress
 
         Args:
             source_path: Local source directory
@@ -952,8 +970,10 @@ class PhotoWorkflow:
         Returns:
             Dict with 'scanned', 'sync_successful', 'connection_method', 'trash_path', 'errors'
         """
+        import re
         from datetime import datetime
         from photo_flow.console_utils import info, error as print_error, warning
+        from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 
         stats = {
             'source': source_name,
@@ -973,6 +993,10 @@ class PhotoWorkflow:
             print_error("rsync not found on PATH. Please install rsync.")
             stats['errors'] += 1
             return stats
+
+        # Check rsync version for progress2 support (requires >= 3.1.0)
+        rsync_version = self._get_rsync_version()
+        use_progress2 = rsync_version >= (3, 1, 0)
 
         # Count files
         try:
@@ -1007,7 +1031,15 @@ class PhotoWorkflow:
 
         for method, ssh_cmd in ssh_configs:
             # Build rsync command with trash-based deletion
-            cmd = ["rsync", "-av", "--partial", "--whole-file", "--progress"]
+            cmd = ["rsync", "-a", "--partial", "--whole-file"]
+
+            if use_progress2:
+                # Modern rsync: overall progress with --info=progress2
+                cmd.extend(["--info=progress2", "--no-inc-recursive"])
+            else:
+                # Old rsync: per-file progress, parse to-chk for overall
+                cmd.append("--progress")
+
             # Use --backup --backup-dir instead of --delete
             cmd.extend(["--backup", f"--backup-dir={trash_folder}"])
             # Add exclusion patterns for system files
@@ -1025,16 +1057,100 @@ class PhotoWorkflow:
                 info("Trying ProxyJump via VPS (IPv4)...")
 
             try:
-                # Let rsync progress output flow to terminal
-                subprocess.run(cmd, check=True)
-                stats['sync_successful'] = True
-                stats['connection_method'] = method
-                method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
-                info(f"[green]✓[/green] {source_name.title()} backup completed successfully using {method_desc}")
-                return stats
-            except subprocess.CalledProcessError as e:
+                # Run rsync with real-time progress parsing
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1  # Line buffered
+                )
+
+                # Progress patterns
+                if use_progress2:
+                    # Format: "1,234,567  45%  12.34MB/s  0:01:23"
+                    progress_pattern = re.compile(
+                        r'[\d,]+\s+(\d+)%\s+([\d.]+\w+/s)\s+(\d+:\d+:\d+)'
+                    )
+                else:
+                    # macOS rsync format: "(xfer#27, to-check=747/1960)"
+                    # to-check=remaining/total - use this for overall progress
+                    progress_pattern = re.compile(r'to-check=(\d+)/(\d+)')
+                    # Also capture speed from per-file progress (e.g., "241.10MB/s")
+                    speed_pattern = re.compile(r'(\d+\.\d+\w+/s)')
+
+                # Rich Progress bar for rsync
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[cyan]{task.description}"),
+                    BarColumn(bar_width=30),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TextColumn("•"),
+                    TextColumn("{task.fields[speed]:>10}"),
+                    TextColumn("•"),
+                    TextColumn("{task.fields[files]}"),
+                    TextColumn("•"),
+                    TimeElapsedColumn(),
+                    transient=True,  # Remove progress bar when done
+                ) as progress:
+                    task = progress.add_task(
+                        f"Syncing {source_name}...",
+                        total=100,
+                        speed="--",
+                        files="--"
+                    )
+
+                    last_speed = "--"
+
+                    for line in iter(proc.stdout.readline, ''):
+                        if not line:
+                            break
+
+                        if use_progress2:
+                            match = progress_pattern.search(line)
+                            if match:
+                                pct, speed, eta = match.groups()
+                                progress.update(
+                                    task,
+                                    completed=int(pct),
+                                    speed=speed,
+                                    files=f"ETA: {eta}"
+                                )
+                        else:
+                            # Parse to-check=remaining/total for progress
+                            match = progress_pattern.search(line)
+                            if match:
+                                remaining, total = match.groups()
+                                remaining, total = int(remaining), int(total)
+                                done = total - remaining
+                                pct = (done * 100) // total if total > 0 else 0
+                                progress.update(
+                                    task,
+                                    completed=pct,
+                                    speed=last_speed,
+                                    files=f"{done:,}/{total:,}"
+                                )
+                            # Also try to capture speed
+                            speed_match = speed_pattern.search(line)
+                            if speed_match:
+                                last_speed = speed_match.group(1)
+
+                    proc.wait()
+
+                if proc.returncode == 0:
+                    stats['sync_successful'] = True
+                    stats['connection_method'] = method
+                    method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
+                    info(f"[green]✓[/green] {source_name.title()} backup completed using {method_desc}")
+                    return stats
+                else:
+                    # Non-zero exit, try next method
+                    if method == "proxyjump":
+                        stats['errors'] += 1
+                        print_error(f"Both connection methods failed (exit code: {proc.returncode})")
+
+            except Exception as e:
                 if method == "proxyjump":
-                    # Both methods failed
                     stats['errors'] += 1
                     print_error(f"Both connection methods failed. Last error: {e}")
                 # Continue to next method

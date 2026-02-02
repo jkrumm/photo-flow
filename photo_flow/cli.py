@@ -227,7 +227,7 @@ def backup(dry_run):
             if remote >= 0:
                 if needs > 0:
                     status_lines.append(
-                        f"  [yellow]![/yellow] {key.upper():8s} {local:,} local │ {remote:,} remote │ [yellow]{needs:,} to sync[/yellow]"
+                        f"  [yellow]![/yellow] {key.upper():8s} {local:,} local │ {remote:,} remote │ [yellow]~{needs:,} new[/yellow]"
                     )
                 else:
                     status_lines.append(
