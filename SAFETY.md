@@ -42,9 +42,8 @@ This project implements a **safety-first architecture** designed to prevent data
 - No silent failures - all errors reported clearly
 
 ### 7. Network Resilience
-- **Automatic IPv4/IPv6 fallback** for remote backups
+- **Tailscale connectivity** for encrypted mesh network backups
 - Connection timeouts prevent hanging operations
-- ProxyJump fallback for IPv4-only networks when traveling
 - rsync partial transfers allow resuming interrupted uploads
 
 ### 8. Verification at Every Step
@@ -100,14 +99,12 @@ def compress_jpeg_safe(input_path):
 ### Safe Network Operations (`workflow.py`)
 ```python
 def backup_final_to_homelab():
-    # Try direct connection first (IPv6)
-    # Fallback to ProxyJump via VPS (IPv4)
-    for method, ssh_config in [("direct", ssh_base), ("proxyjump", ssh_jump)]:
-        try:
-            subprocess.run(['rsync', '-e', ssh_config, src, remote], check=True)
-            return success
-        except:
-            continue  # Try next method
+    # Connect via Tailscale (encrypted mesh network)
+    try:
+        subprocess.run(['rsync', '-e', ssh_cmd, src, remote], check=True)
+        return success
+    except Exception as e:
+        return error
 ```
 
 ## Why This Level of Safety?

@@ -83,15 +83,14 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 
 **Homelab Backup** (in config.py):
 - User: `jkrumm`
-- Host: `homelab.jkrumm.com`
+- Host: `100.85.139.104` (Tailscale IP)
 - Path: `/home/jkrumm/ssd/SSD/Bilder/Fuji`
-- Jump Host: `5.75.178.196` (VPS for IPv4 fallback)
-- Method: rsync with automatic IPv6/IPv4 fallback
+- Method: rsync via Tailscale (encrypted mesh network)
 - Exclusions: System files (`.DS_Store`, `._*`, `Thumbs.db`, etc.) are filtered out
 
-**Gallery Sync** (⚠️ HARDCODED in workflow.py:683 - NOT in config.py):
+**Gallery Sync** (⚠️ HARDCODED in workflow.py - NOT in config.py):
 - User: `jkrumm`
-- Host: `5.75.178.196`
+- Host: `100.82.157.104` (VPS Tailscale IP)
 - Path: `/home/jkrumm/sideproject-docker-stack/photo_gallery`
 - Method: rsync after npm build
 
@@ -347,8 +346,8 @@ StatusReport:
 **Logging**: Uses Python's `logging` module with `logger.debug()` for debug output and `logger.error()` for errors
 
 **Remote Destination (HARDCODED - NOT in config.py):**
-- Location: workflow.py:~815
-- Value: `jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery`
+- Location: workflow.py:~765
+- Value: `jkrumm@100.82.157.104:/home/jkrumm/sideproject-docker-stack/photo_gallery` (VPS Tailscale IP)
 - TODO: Move to config.py
 
 **Returns:**
@@ -367,28 +366,25 @@ StatusReport:
 ```
 
 #### `backup_final_to_homelab(dry_run=False, progress_callback=None) -> Dict[str, int]`
-**Process (IPv4/IPv6 Automatic Fallback):**
+**Process (Tailscale Connection):**
 1. **Safety check**: Verify Final folder has sufficient files (prevents accidental wipe)
    - **Output**: Warning messages if folder appears empty/unmounted
-2. **Try direct SSH**: IPv6 connection (timeout: 5s)
+2. **Connect via Tailscale**: SSH to homelab Tailscale IP (timeout: 5s)
    - **Output**: Info message about connection attempt
-3. **Fallback to ProxyJump**: IPv4 via VPS if direct fails
-   - **Output**: Warning + info about fallback
-4. Rsync flags: `-av --delete --partial --whole-file --progress`
-5. **Exclusions**: Filters out system files (`.DS_Store`, `._*`, `Thumbs.db`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`)
-6. SSH cipher: `aes128-gcm@openssh.com` (fast, no compression)
-   - **Output**: Rsync's own progress output flows to terminal + success/error messages
+3. Rsync flags: `-a --partial --whole-file --progress`
+4. **Exclusions**: Filters out system files (`.DS_Store`, `._*`, `Thumbs.db`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`)
+5. SSH cipher: `aes128-gcm@openssh.com` (fast, no compression)
+   - **Output**: Rich Progress bar + success/error messages
 
-**SSH Configurations:**
-- Direct: `ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5`
-- ProxyJump: `ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5 -J jkrumm@5.75.178.196`
+**SSH Configuration:**
+- `ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5`
 
 **Returns:**
 ```python
 {
     'scanned': int,                     # Files in Final folder
     'sync_successful': bool,            # Rsync succeeded
-    'connection_method': str,           # 'direct' or 'proxyjump'
+    'connection_method': str,           # 'tailscale'
     'errors': int
 }
 ```
@@ -568,7 +564,7 @@ def photoflow()
 1. Add to config.py:
    ```python
    GALLERY_REMOTE_USER = "jkrumm"
-   GALLERY_REMOTE_HOST = "5.75.178.196"
+   GALLERY_REMOTE_HOST = "100.82.157.104"  # VPS Tailscale IP
    GALLERY_REMOTE_PATH = Path("/home/jkrumm/sideproject-docker-stack/photo_gallery")
    ```
 2. Update workflow.py:683: Use config constants
@@ -593,7 +589,7 @@ def photoflow()
 | "SSD not connected" | Volume not mounted | Check `/Volumes/EXT` exists | workflow.py:514 |
 | "Hash mismatch" | Copy verification failed | Auto-retry mechanism (already implemented) | file_manager.py:93 |
 | "npm build failed" | Wrong Node version | Check `.nvmrc` in photo_gallery/, install correct version | workflow.py:665 |
-| "rsync timeout" | Network connectivity | Automatically tries ProxyJump fallback | workflow.py:711 |
+| "rsync timeout" | Network connectivity | Check Tailscale connection (`tailscale status`) | workflow.py |
 | "Permission denied" | Write access issue | Check directory permissions with `ls -la` | Various |
 | "Disk space full" | Insufficient space | Free up space on target drive | Various |
 

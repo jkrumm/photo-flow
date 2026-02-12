@@ -336,7 +336,7 @@ def backup(dry_run):
         if not dry_run:
             results["Backup successful"] = "Yes" if stats.get('sync_successful') else "No"
             if stats.get('connection_method'):
-                method_desc = "direct IPv6" if stats['connection_method'] == "direct" else "ProxyJump via VPS (IPv4)"
+                method_desc = "Tailscale"
                 results["Connection method"] = method_desc
             if stats.get('trash_path'):
                 results["Trash location"] = stats['trash_path']

@@ -16,7 +16,7 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 
 # Remote backup (homelab) settings
 HOMELAB_USER = "jkrumm"
-HOMELAB_HOST = "homelab.jkrumm.com"
+HOMELAB_HOST = "100.85.139.104"  # Tailscale IP
 # SSD backup path (for Final JPEGs - fast access)
 HOMELAB_SSD_FINAL_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
 # HDD backup paths (for large files - RAWs and Videos)
@@ -26,9 +26,6 @@ HOMELAB_HDD_VIDEOS_PATH = Path("/mnt/hdd/fuji/Videos")
 HOMELAB_TRASH_PATH = Path("/mnt/hdd/fuji/.trash")
 # Legacy alias for backwards compatibility
 HOMELAB_DEST_PATH = HOMELAB_SSD_FINAL_PATH
-# Jump host for IPv4-only networks (auto-fallback if direct IPv6 fails)
-HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 address
-HOMELAB_JUMP_USER = "jkrumm"
 # Default rsync flags optimized for speed and safety over SSH
 # -a archive, -v verbose (shows files being transferred), --delete keep remote in sync
 # --partial resume partial transfers, --whole-file avoids delta CPU overhead for new/changed files
@@ -45,10 +42,8 @@ RSYNC_EXCLUDE_PATTERNS = [
     ".fseventsd",     # macOS filesystem events
 ]
 # Use a faster SSH configuration: disable SSH stream compression and prefer a fast cipher
-# Note: You can change this if your environment prefers a different cipher.
-RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
-# SSH with ProxyJump for IPv4-only networks
-RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
+# Connection via Tailscale (encrypted mesh network, no port exposure needed)
+RSYNC_SSH_CMD = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
 
 # Image processing settings
 CLARITY_ADJUSTMENT = -3

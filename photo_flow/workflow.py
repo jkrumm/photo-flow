@@ -16,7 +16,7 @@ from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
     HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
-    RSYNC_SSH_BASE, RSYNC_SSH_JUMP
+    RSYNC_SSH_CMD
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
@@ -762,7 +762,7 @@ class PhotoWorkflow:
                             "-avz",
                             "--delete",
                             f"{photo_gallery_path}/dist/",
-                            "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery"
+                            "jkrumm@100.82.157.104:/home/jkrumm/sideproject-docker-stack/photo_gallery"
                         ],
                         capture_output=True,
                         text=True,
@@ -798,8 +798,7 @@ class PhotoWorkflow:
         (deleted/replaced files are moved to a timestamped trash folder instead
         of being permanently deleted).
 
-        Automatically tries direct connection first (IPv6), then falls back to
-        ProxyJump via VPS if direct connection fails (IPv4-only networks).
+        Connects via Tailscale (encrypted mesh network).
 
         Args:
             dry_run (bool): If True, only simulate the backup without syncing
@@ -833,40 +832,31 @@ class PhotoWorkflow:
 
     def _get_remote_file_count(self, remote_path: Path, extension: str) -> tuple[int, str]:
         """
-        Get file count from remote homelab directory via SSH.
-
-        Tries direct connection first, then ProxyJump fallback.
+        Get file count from remote homelab directory via SSH (Tailscale).
 
         Args:
             remote_path: Remote directory path
             extension: File extension to count (e.g., '*.JPG')
 
         Returns:
-            Tuple of (count, connection_method) or (-1, error_message) on failure
+            Tuple of (count, "tailscale") or (-1, error_message) on failure
         """
-        ssh_configs = [
-            ("direct", RSYNC_SSH_BASE),
-            ("proxyjump", RSYNC_SSH_JUMP)
-        ]
+        try:
+            remote = f"{HOMELAB_USER}@{HOMELAB_HOST}"
+            count_cmd = f"find {remote_path} -maxdepth 1 -name '{extension}' 2>/dev/null | wc -l"
 
-        for method, ssh_cmd in ssh_configs:
-            try:
-                # Build SSH command to count files
-                remote = f"{HOMELAB_USER}@{HOMELAB_HOST}"
-                count_cmd = f"find {remote_path} -maxdepth 1 -name '{extension}' 2>/dev/null | wc -l"
+            result = subprocess.run(
+                ["ssh"] + RSYNC_SSH_CMD.split()[1:] + [remote, count_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
 
-                result = subprocess.run(
-                    ["ssh"] + ssh_cmd.split()[1:] + [remote, count_cmd],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
-
-                if result.returncode == 0:
-                    count = int(result.stdout.strip())
-                    return (count, method)
-            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
-                continue
+            if result.returncode == 0:
+                count = int(result.stdout.strip())
+                return (count, "tailscale")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
+            pass
 
         return (-1, "connection failed")
 
@@ -1023,137 +1013,135 @@ class PhotoWorkflow:
         remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(remote_dest)}"
         src = f"{str(source_path)}/"  # trailing slash = sync contents
 
-        # Try direct connection first (IPv6), then fall back to ProxyJump (IPv4)
-        ssh_configs = [
-            ("direct", RSYNC_SSH_BASE),
-            ("proxyjump", RSYNC_SSH_JUMP)
-        ]
+        # Connect via Tailscale (encrypted mesh network)
+        cmd = ["rsync", "-a", "--partial", "--whole-file"]
 
-        for method, ssh_cmd in ssh_configs:
-            # Build rsync command with trash-based deletion
-            cmd = ["rsync", "-a", "--partial", "--whole-file"]
+        if use_progress2:
+            # Modern rsync: overall progress with --info=progress2
+            cmd.extend(["--info=progress2", "--no-inc-recursive"])
+        else:
+            # Old rsync: per-file progress, parse to-chk for overall
+            cmd.append("--progress")
 
+        # Use --backup --backup-dir instead of --delete
+        cmd.extend(["--backup", f"--backup-dir={trash_folder}"])
+        # Add exclusion patterns for system files
+        for pattern in RSYNC_EXCLUDE_PATTERNS:
+            cmd.extend(["--exclude", pattern])
+        cmd.extend(["-e", RSYNC_SSH_CMD])
+        if dry_run:
+            cmd.append("-n")
+        cmd.extend([src, remote])
+
+        info("Connecting via Tailscale...")
+
+        try:
+            # Run rsync with real-time progress parsing
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1  # Line buffered
+            )
+
+            # Progress patterns
             if use_progress2:
-                # Modern rsync: overall progress with --info=progress2
-                cmd.extend(["--info=progress2", "--no-inc-recursive"])
+                # Format: "1,234,567  45%  12.34MB/s  0:01:23"
+                progress_pattern = re.compile(
+                    r'[\d,]+\s+(\d+)%\s+([\d.]+\w+/s)\s+(\d+:\d+:\d+)'
+                )
             else:
-                # Old rsync: per-file progress, parse to-chk for overall
-                cmd.append("--progress")
+                # macOS rsync format: "(xfer#27, to-check=747/1960)"
+                # to-check=remaining/total - use this for overall progress
+                progress_pattern = re.compile(r'to-check=(\d+)/(\d+)')
+                # Also capture speed from per-file progress (e.g., "241.10MB/s")
+                speed_pattern = re.compile(r'(\d+\.\d+\w+/s)')
 
-            # Use --backup --backup-dir instead of --delete
-            cmd.extend(["--backup", f"--backup-dir={trash_folder}"])
-            # Add exclusion patterns for system files
-            for pattern in RSYNC_EXCLUDE_PATTERNS:
-                cmd.extend(["--exclude", pattern])
-            cmd.extend(["-e", ssh_cmd])
-            if dry_run:
-                cmd.append("-n")
-            cmd.extend([src, remote])
-
-            if method == "direct":
-                info("Attempting direct connection (IPv6)...")
-            else:
-                warning("Direct connection failed.")
-                info("Trying ProxyJump via VPS (IPv4)...")
-
-            try:
-                # Run rsync with real-time progress parsing
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1  # Line buffered
+            # Rich Progress bar for rsync
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[cyan]{task.description}"),
+                BarColumn(bar_width=30),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TextColumn("•"),
+                TextColumn("{task.fields[speed]:>10}"),
+                TextColumn("•"),
+                TextColumn("{task.fields[files]}"),
+                TextColumn("•"),
+                TimeElapsedColumn(),
+                transient=True,  # Remove progress bar when done
+            ) as progress:
+                task = progress.add_task(
+                    f"Syncing {source_name}...",
+                    total=100,
+                    speed="--",
+                    files="--"
                 )
 
-                # Progress patterns
-                if use_progress2:
-                    # Format: "1,234,567  45%  12.34MB/s  0:01:23"
-                    progress_pattern = re.compile(
-                        r'[\d,]+\s+(\d+)%\s+([\d.]+\w+/s)\s+(\d+:\d+:\d+)'
-                    )
-                else:
-                    # macOS rsync format: "(xfer#27, to-check=747/1960)"
-                    # to-check=remaining/total - use this for overall progress
-                    progress_pattern = re.compile(r'to-check=(\d+)/(\d+)')
-                    # Also capture speed from per-file progress (e.g., "241.10MB/s")
-                    speed_pattern = re.compile(r'(\d+\.\d+\w+/s)')
+                last_speed = "--"
+                error_lines = []
 
-                # Rich Progress bar for rsync
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[cyan]{task.description}"),
-                    BarColumn(bar_width=30),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    TextColumn("•"),
-                    TextColumn("{task.fields[speed]:>10}"),
-                    TextColumn("•"),
-                    TextColumn("{task.fields[files]}"),
-                    TextColumn("•"),
-                    TimeElapsedColumn(),
-                    transient=True,  # Remove progress bar when done
-                ) as progress:
-                    task = progress.add_task(
-                        f"Syncing {source_name}...",
-                        total=100,
-                        speed="--",
-                        files="--"
-                    )
+                for line in iter(proc.stdout.readline, ''):
+                    if not line:
+                        break
 
-                    last_speed = "--"
+                    matched = False
+                    if use_progress2:
+                        match = progress_pattern.search(line)
+                        if match:
+                            matched = True
+                            pct, speed, eta = match.groups()
+                            progress.update(
+                                task,
+                                completed=int(pct),
+                                speed=speed,
+                                files=f"ETA: {eta}"
+                            )
+                    else:
+                        # Parse to-check=remaining/total for progress
+                        match = progress_pattern.search(line)
+                        if match:
+                            matched = True
+                            remaining, total = match.groups()
+                            remaining, total = int(remaining), int(total)
+                            done = total - remaining
+                            pct = (done * 100) // total if total > 0 else 0
+                            progress.update(
+                                task,
+                                completed=pct,
+                                speed=last_speed,
+                                files=f"{done:,}/{total:,}"
+                            )
+                        # Also try to capture speed
+                        speed_match = speed_pattern.search(line)
+                        if speed_match:
+                            matched = True
+                            last_speed = speed_match.group(1)
 
-                    for line in iter(proc.stdout.readline, ''):
-                        if not line:
-                            break
+                    # Capture non-progress lines for error reporting
+                    if not matched:
+                        stripped = line.strip()
+                        if stripped:
+                            error_lines.append(stripped)
 
-                        if use_progress2:
-                            match = progress_pattern.search(line)
-                            if match:
-                                pct, speed, eta = match.groups()
-                                progress.update(
-                                    task,
-                                    completed=int(pct),
-                                    speed=speed,
-                                    files=f"ETA: {eta}"
-                                )
-                        else:
-                            # Parse to-check=remaining/total for progress
-                            match = progress_pattern.search(line)
-                            if match:
-                                remaining, total = match.groups()
-                                remaining, total = int(remaining), int(total)
-                                done = total - remaining
-                                pct = (done * 100) // total if total > 0 else 0
-                                progress.update(
-                                    task,
-                                    completed=pct,
-                                    speed=last_speed,
-                                    files=f"{done:,}/{total:,}"
-                                )
-                            # Also try to capture speed
-                            speed_match = speed_pattern.search(line)
-                            if speed_match:
-                                last_speed = speed_match.group(1)
+                proc.wait()
 
-                    proc.wait()
+            if proc.returncode == 0:
+                stats['sync_successful'] = True
+                stats['connection_method'] = 'tailscale'
+                info(f"[green]✓[/green] {source_name.title()} backup completed via Tailscale")
+                return stats
+            else:
+                stats['errors'] += 1
+                print_error(f"Rsync failed (exit code: {proc.returncode})")
+                if error_lines:
+                    for err_line in error_lines[-5:]:  # Show last 5 error lines
+                        print_error(f"  {err_line}")
 
-                if proc.returncode == 0:
-                    stats['sync_successful'] = True
-                    stats['connection_method'] = method
-                    method_desc = "direct IPv6" if method == "direct" else "ProxyJump via VPS"
-                    info(f"[green]✓[/green] {source_name.title()} backup completed using {method_desc}")
-                    return stats
-                else:
-                    # Non-zero exit, try next method
-                    if method == "proxyjump":
-                        stats['errors'] += 1
-                        print_error(f"Both connection methods failed (exit code: {proc.returncode})")
-
-            except Exception as e:
-                if method == "proxyjump":
-                    stats['errors'] += 1
-                    print_error(f"Both connection methods failed. Last error: {e}")
-                # Continue to next method
+        except Exception as e:
+            stats['errors'] += 1
+            print_error(f"Backup failed: {e}")
 
         return stats
 

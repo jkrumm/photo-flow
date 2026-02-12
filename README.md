@@ -22,7 +22,7 @@ A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging w
 - Confirmation prompts for destructive actions
 - **Safety-first architecture**: copy-first approach, atomic operations, automatic backups
 - **Complete metadata preservation**: All EXIF, IPTC, XMP data preserved during compression
-- **Smart connectivity**: Automatic IPv4/IPv6 fallback for backups when traveling
+- **Smart connectivity**: Backup via Tailscale (encrypted mesh network)
 - **Beautiful CLI output**: Rich-formatted terminal output with color-coded status, progress indicators, and structured summaries
 - Case-insensitive handling for .JPG/.RAF
 
@@ -130,7 +130,7 @@ photoflow sync-gallery
 
 ### `photoflow backup`
 Backup the Final folder to your homelab via rsync:
-- **Automatic connectivity fallback**: Tries direct IPv6 first, falls back to ProxyJump via VPS for IPv4-only networks
+- **Tailscale connectivity**: Connects via encrypted mesh network (no port exposure needed)
 - **Smart filtering**: Excludes system files (`.DS_Store`, `._*`, `Thumbs.db`, etc.) - only backs up your photos
 - Syncs the contents of Final/ to the remote directory
 - Uses rsync for safe, interruptible transfers (--partial)
@@ -157,16 +157,13 @@ FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
 
-# Remote backup (homelab) - automatic IPv4/IPv6 fallback
+# Remote backup (homelab) - via Tailscale
 HOMELAB_USER = "jkrumm"
-HOMELAB_HOST = "homelab.jkrumm.com"
+HOMELAB_HOST = "100.85.139.104"  # Tailscale IP
 HOMELAB_DEST_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
-HOMELAB_JUMP_HOST = "5.75.178.196"  # VPS IPv4 for ProxyJump fallback
-HOMELAB_JUMP_USER = "jkrumm"
 RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
 RSYNC_EXCLUDE_PATTERNS = [".DS_Store", "._*", "Thumbs.db", ".Spotlight-V100", ".Trashes", ".fseventsd"]
-RSYNC_SSH_BASE = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
-RSYNC_SSH_JUMP = f"{RSYNC_SSH_BASE} -J {HOMELAB_JUMP_USER}@{HOMELAB_JUMP_HOST}"
+RSYNC_SSH_CMD = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```

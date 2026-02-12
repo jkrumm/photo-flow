@@ -17,7 +17,7 @@
 
 **Current**: Hardcoded string in workflow logic:
 ```python
-remote_dest = "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_gallery"
+remote_dest = "jkrumm@100.82.157.104:/home/jkrumm/sideproject-docker-stack/photo_gallery"
 ```
 
 **Recommended Fix**: Move to `config.py`:
@@ -26,7 +26,7 @@ remote_dest = "jkrumm@5.75.178.196:/home/jkrumm/sideproject-docker-stack/photo_g
 ```python
 # Gallery remote sync settings
 GALLERY_REMOTE_USER = "jkrumm"
-GALLERY_REMOTE_HOST = "5.75.178.196"
+GALLERY_REMOTE_HOST = "100.82.157.104"  # VPS Tailscale IP
 GALLERY_REMOTE_PATH = Path("/home/jkrumm/sideproject-docker-stack/photo_gallery")
 ```
 
@@ -156,13 +156,12 @@ paths:
 
 homelab:
   user: "jkrumm"
-  host: "homelab.jkrumm.com"
+  host: "100.85.139.104"  # Tailscale IP
   dest_path: "/home/jkrumm/ssd/SSD/Bilder/Fuji"
-  jump_host: "5.75.178.196"
 
 gallery:
   user: "jkrumm"
-  host: "5.75.178.196"
+  host: "100.82.157.104"  # VPS Tailscale IP
   remote_path: "/home/jkrumm/sideproject-docker-stack/photo_gallery"
   rating_threshold: 4
 
