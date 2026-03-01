@@ -15,6 +15,28 @@ const { title } = Astro.props;
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <script is:inline defer src="https://umami.jkrumm.com/p.js" data-website-id="86a334e2-f2c4-4d84-8aa5-b05a74829ffe"></script>
+    <script is:inline>
+      window.addEventListener('load', function () {
+        var thresholds = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+        var fired = new Set();
+        var timer;
+        function check() {
+          var scrollable = document.documentElement.scrollHeight - window.innerHeight;
+          if (scrollable <= 0) return;
+          var pct = Math.round((window.scrollY / scrollable) * 100);
+          thresholds.forEach(function (t) {
+            if (pct >= t && !fired.has(t)) {
+              fired.add(t);
+              window.umami && window.umami.track('scroll-depth', { depth: t });
+            }
+          });
+        }
+        window.addEventListener('scroll', function () {
+          clearTimeout(timer);
+          timer = setTimeout(check, 100);
+        }, { passive: true });
+      });
+    </script>
 </head>
   <body>
     <main>
