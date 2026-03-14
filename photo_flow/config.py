@@ -26,12 +26,7 @@ HOMELAB_HDD_VIDEOS_PATH = Path("/mnt/hdd/fuji/Videos")
 HOMELAB_TRASH_PATH = Path("/mnt/hdd/fuji/.trash")
 # Legacy alias for backwards compatibility
 HOMELAB_DEST_PATH = HOMELAB_SSD_FINAL_PATH
-# Default rsync flags optimized for speed and safety over SSH
-# -a archive, -v verbose (shows files being transferred), --delete keep remote in sync
-# --partial resume partial transfers, --whole-file avoids delta CPU overhead for new/changed files
-# --progress shows transfer speed and file numbers
-RSYNC_FLAGS = ["-av", "--delete", "--partial", "--whole-file", "--progress"]
-# Exclude system files from rsync (macOS resource forks, Windows thumbnails, etc.)
+# Exclude system files from backup (macOS resource forks, Windows thumbnails, etc.)
 # These files are not portable and not part of the actual photo data
 RSYNC_EXCLUDE_PATTERNS = [
     ".DS_Store",      # macOS folder view settings
@@ -41,9 +36,13 @@ RSYNC_EXCLUDE_PATTERNS = [
     ".Trashes",       # macOS trash folder
     ".fseventsd",     # macOS filesystem events
 ]
-# Use a faster SSH configuration: disable SSH stream compression and prefer a fast cipher
+# rclone parallel transfer settings
 # Connection via Tailscale (encrypted mesh network, no port exposure needed)
-RSYNC_SSH_CMD = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTimeout=5"
+RCLONE_TRANSFERS = 8           # Parallel file transfers (optimal for 5–100MB files over LAN)
+RCLONE_SSH_CIPHER = "aes128-gcm@openssh.com"
+RCLONE_SFTP_CONCURRENCY = 64  # Concurrent SFTP requests per transfer (speeds up large files)
+# SSH options list for direct SSH calls (e.g. remote file count check)
+HOMELAB_SSH_OPTS = ["-T", "-c", "aes128-gcm@openssh.com", "-o", "Compression=no", "-o", "ConnectTimeout=5"]
 
 # Image processing settings
 CLARITY_ADJUSTMENT = -3

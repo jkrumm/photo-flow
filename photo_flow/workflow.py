@@ -16,7 +16,7 @@ from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
     HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
-    RSYNC_SSH_CMD
+    RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.image_processor import ImageProcessor
@@ -792,7 +792,7 @@ class PhotoWorkflow:
 
     def backup_final_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
         """
-        Backup the Final folder to the homelab server via rsync.
+        Backup the Final folder to the homelab server via rclone with parallel transfers.
 
         Uses rsync for safe, interruptible syncing with trash-based deletion
         (deleted/replaced files are moved to a timestamped trash folder instead
@@ -809,7 +809,7 @@ class PhotoWorkflow:
         """
         from photo_flow.console_utils import info, warning
 
-        stats = self._run_backup_rsync(
+        stats = self._run_backup_rclone(
             source_path=FINAL_PATH,
             remote_dest=HOMELAB_SSD_FINAL_PATH,
             source_name='final',
@@ -846,7 +846,7 @@ class PhotoWorkflow:
             count_cmd = f"find {remote_path} -maxdepth 1 -name '{extension}' 2>/dev/null | wc -l"
 
             result = subprocess.run(
-                ["ssh"] + RSYNC_SSH_CMD.split()[1:] + [remote, count_cmd],
+                ["ssh"] + HOMELAB_SSH_OPTS + [remote, count_cmd],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -916,21 +916,7 @@ class PhotoWorkflow:
 
         return result
 
-    def _get_rsync_version(self) -> tuple[int, int, int]:
-        """Get rsync version as tuple (major, minor, patch). Returns (0, 0, 0) on error."""
-        import re
-        try:
-            result = subprocess.run(["rsync", "--version"], capture_output=True, text=True)
-            # Parse "rsync  version 3.2.7" or "rsync version 2.6.9"
-            match = re.search(r'version (\d+)\.(\d+)\.?(\d*)', result.stdout)
-            if match:
-                major, minor, patch = match.groups()
-                return (int(major), int(minor), int(patch) if patch else 0)
-        except Exception:
-            pass
-        return (0, 0, 0)
-
-    def _run_backup_rsync(
+    def _run_backup_rclone(
         self,
         source_path: Path,
         remote_dest: Path,
@@ -940,14 +926,12 @@ class PhotoWorkflow:
         file_pattern: str = '*'
     ) -> Dict[str, any]:
         """
-        Internal helper to run rsync backup with trash-based deletion and Rich Progress.
+        Internal helper to run rclone backup with parallel transfers, trash-based deletion,
+        and Rich Progress.
 
-        Instead of --delete (permanent), uses --backup --backup-dir to move
-        deleted/replaced files to a timestamped trash folder.
-
-        Automatically detects rsync version and uses appropriate progress display:
-        - rsync >= 3.1.0: Uses --info=progress2 for overall progress
-        - rsync < 3.1.0: Uses --progress and parses to-chk=X/Y for progress
+        Uses rclone sync over SFTP with --backup-dir to move deleted/replaced files to a
+        timestamped trash folder instead of permanent deletion. 8 parallel transfers saturate
+        fast LAN bandwidth over Tailscale.
 
         Args:
             source_path: Local source directory
@@ -979,14 +963,10 @@ class PhotoWorkflow:
             print_error(f"Source folder does not exist: {source_path}")
             return stats
 
-        if shutil.which("rsync") is None:
-            print_error("rsync not found on PATH. Please install rsync.")
+        if shutil.which("rclone") is None:
+            print_error("rclone not found on PATH. Install with: brew install rclone")
             stats['errors'] += 1
             return stats
-
-        # Check rsync version for progress2 support (requires >= 3.1.0)
-        rsync_version = self._get_rsync_version()
-        use_progress2 = rsync_version >= (3, 1, 0)
 
         # Count files
         try:
@@ -1010,55 +990,60 @@ class PhotoWorkflow:
         trash_folder = f"{HOMELAB_TRASH_PATH}/{source_name}_{timestamp}"
         stats['trash_path'] = trash_folder
 
-        remote = f"{HOMELAB_USER}@{HOMELAB_HOST}:{str(remote_dest)}"
-        src = f"{str(source_path)}/"  # trailing slash = sync contents
+        # rclone on-the-fly SFTP remote (no config file needed)
+        remote_base = f':sftp,host="{HOMELAB_HOST}",user="{HOMELAB_USER}",ciphers="{RCLONE_SSH_CIPHER}":'
+        dst = remote_base + str(remote_dest)
+        trash_remote = remote_base + trash_folder
 
-        # Connect via Tailscale (encrypted mesh network)
-        cmd = ["rsync", "-a", "--partial", "--whole-file"]
+        src = str(source_path) + "/"  # trailing slash = sync contents
 
-        if use_progress2:
-            # Modern rsync: overall progress with --info=progress2
-            cmd.extend(["--info=progress2", "--no-inc-recursive"])
-        else:
-            # Old rsync: per-file progress, parse to-chk for overall
-            cmd.append("--progress")
-
-        # Use --backup --backup-dir instead of --delete
-        cmd.extend(["--backup", f"--backup-dir={trash_folder}"])
-        # Add exclusion patterns for system files
+        cmd = [
+            "rclone", "sync",
+            "--sftp-key-use-agent",  # Use SSH_AUTH_SOCK (1Password agent). Must come before src/dst.
+            f"--transfers={RCLONE_TRANSFERS}",
+            f"--sftp-concurrency={RCLONE_SFTP_CONCURRENCY}",
+            "--backup-dir", trash_remote,
+            "-v",          # Required: without -v, rclone emits no stats to the pipe
+            "--stats=1s",
+            "--retries", "3",
+            src, dst,
+        ]
         for pattern in RSYNC_EXCLUDE_PATTERNS:
-            cmd.extend(["--exclude", pattern])
-        cmd.extend(["-e", RSYNC_SSH_CMD])
+            cmd += ["--exclude", pattern]
         if dry_run:
-            cmd.append("-n")
-        cmd.extend([src, remote])
+            cmd.append("--dry-run")
 
         info("Connecting via Tailscale...")
 
+        # rclone -v --stats=1s produces multi-line blocks to stderr (merged via STDOUT).
+        # Relevant line: "Transferred:\t   21.281 MiB / 40 MiB, 53%, 356.951 KiB/s, ETA 53s"
+        # Without -v, rclone emits no stats at all when piped (non-TTY).
+        progress_pattern = re.compile(
+            r'Transferred:.*?,\s+(\d+)%,\s+([\d.]+\s*\S+/s),\s+ETA\s+(\S+)'
+        )
+
         try:
-            # Run rsync with real-time progress parsing
+            import os
+            # rclone's Go SFTP library doesn't read ~/.ssh/config, so it won't find the
+            # 1Password SSH agent via IdentityAgent. Set SSH_AUTH_SOCK explicitly so
+            # rclone can authenticate using the same agent as plain ssh.
+            env = os.environ.copy()
+            op_agent = os.path.expanduser(
+                "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+            )
+            if os.path.exists(op_agent):
+                env["SSH_AUTH_SOCK"] = op_agent
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1  # Line buffered
+                bufsize=1,  # Line buffered
+                env=env,
             )
 
-            # Progress patterns
-            if use_progress2:
-                # Format: "1,234,567  45%  12.34MB/s  0:01:23"
-                progress_pattern = re.compile(
-                    r'[\d,]+\s+(\d+)%\s+([\d.]+\w+/s)\s+(\d+:\d+:\d+)'
-                )
-            else:
-                # macOS rsync format: "(xfer#27, to-check=747/1960)"
-                # to-check=remaining/total - use this for overall progress
-                progress_pattern = re.compile(r'to-check=(\d+)/(\d+)')
-                # Also capture speed from per-file progress (e.g., "241.10MB/s")
-                speed_pattern = re.compile(r'(\d+\.\d+\w+/s)')
-
-            # Rich Progress bar for rsync
+            # Rich Progress bar for rclone
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[cyan]{task.description}"),
@@ -1069,6 +1054,8 @@ class PhotoWorkflow:
                 TextColumn("•"),
                 TextColumn("{task.fields[files]}"),
                 TextColumn("•"),
+                TextColumn("{task.fields[eta]}"),
+                TextColumn("•"),
                 TimeElapsedColumn(),
                 transient=True,  # Remove progress bar when done
             ) as progress:
@@ -1076,51 +1063,39 @@ class PhotoWorkflow:
                     f"Syncing {source_name}...",
                     total=100,
                     speed="--",
-                    files="--"
+                    files="--",
+                    eta="--"
                 )
 
-                last_speed = "--"
+                # Also parse "Transferred:   N / M, XX%" for file count
+                files_pattern = re.compile(r'Transferred:\s+(\d+)\s*/\s*(\d+),\s+\d+%')
+
                 error_lines = []
+                transfers_started = False
 
                 for line in iter(proc.stdout.readline, ''):
                     if not line:
                         break
 
-                    matched = False
-                    if use_progress2:
-                        match = progress_pattern.search(line)
-                        if match:
-                            matched = True
-                            pct, speed, eta = match.groups()
-                            progress.update(
-                                task,
-                                completed=int(pct),
-                                speed=speed,
-                                files=f"ETA: {eta}"
-                            )
+                    match = progress_pattern.search(line)
+                    if match:
+                        if not transfers_started:
+                            transfers_started = True
+                            progress.update(task, description=f"Syncing {source_name}...")
+                        pct, speed, eta = match.groups()
+                        progress.update(
+                            task,
+                            completed=int(pct),
+                            speed=speed,
+                            eta=f"ETA: {eta}"
+                        )
                     else:
-                        # Parse to-check=remaining/total for progress
-                        match = progress_pattern.search(line)
-                        if match:
-                            matched = True
-                            remaining, total = match.groups()
-                            remaining, total = int(remaining), int(total)
-                            done = total - remaining
-                            pct = (done * 100) // total if total > 0 else 0
-                            progress.update(
-                                task,
-                                completed=pct,
-                                speed=last_speed,
-                                files=f"{done:,}/{total:,}"
-                            )
-                        # Also try to capture speed
-                        speed_match = speed_pattern.search(line)
-                        if speed_match:
-                            matched = True
-                            last_speed = speed_match.group(1)
-
-                    # Capture non-progress lines for error reporting
-                    if not matched:
+                        files_match = files_pattern.search(line)
+                        if files_match:
+                            done, total_files = files_match.groups()
+                            progress.update(task, files=f"{done}/{total_files} files")
+                        if not transfers_started:
+                            progress.update(task, description=f"Checking {source_name} files...")
                         stripped = line.strip()
                         if stripped:
                             error_lines.append(stripped)
@@ -1134,7 +1109,7 @@ class PhotoWorkflow:
                 return stats
             else:
                 stats['errors'] += 1
-                print_error(f"Rsync failed (exit code: {proc.returncode})")
+                print_error(f"rclone failed (exit code: {proc.returncode})")
                 if error_lines:
                     for err_line in error_lines[-5:]:  # Show last 5 error lines
                         print_error(f"  {err_line}")
@@ -1147,7 +1122,7 @@ class PhotoWorkflow:
 
     def backup_raws_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
         """
-        Backup the RAWs folder to homelab HDD via rsync.
+        Backup the RAWs folder to homelab HDD via rclone with parallel transfers.
 
         Args:
             dry_run: If True, simulate only
@@ -1164,7 +1139,7 @@ class PhotoWorkflow:
             print_error("External SSD must be connected for RAWs backup")
             return {'source': 'raws', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
-        return self._run_backup_rsync(
+        return self._run_backup_rclone(
             source_path=RAWS_PATH,
             remote_dest=HOMELAB_HDD_RAWS_PATH,
             source_name='raws',
@@ -1175,7 +1150,7 @@ class PhotoWorkflow:
 
     def backup_videos_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
         """
-        Backup the Videos folder to homelab HDD via rsync.
+        Backup the Videos folder to homelab HDD via rclone with parallel transfers.
 
         Args:
             dry_run: If True, simulate only
@@ -1192,7 +1167,7 @@ class PhotoWorkflow:
             print_error("External SSD must be connected for Videos backup")
             return {'source': 'videos', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
-        return self._run_backup_rsync(
+        return self._run_backup_rclone(
             source_path=SSD_PATH,
             remote_dest=HOMELAB_HDD_VIDEOS_PATH,
             source_name='videos',
