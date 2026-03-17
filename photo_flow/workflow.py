@@ -15,7 +15,7 @@ from typing import Dict, List
 from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
-    HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
+    HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
     RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
@@ -815,7 +815,8 @@ class PhotoWorkflow:
             source_name='final',
             dry_run=dry_run,
             min_files=100,
-            file_pattern='*.JPG'
+            file_pattern='*.JPG',
+            trash_base_path=HOMELAB_SSD_TRASH_PATH
         )
 
         # Trigger Immich library scan after successful backup
@@ -923,7 +924,8 @@ class PhotoWorkflow:
         source_name: str,
         dry_run: bool = False,
         min_files: int = 0,
-        file_pattern: str = '*'
+        file_pattern: str = '*',
+        trash_base_path: Path = None
     ) -> Dict[str, any]:
         """
         Internal helper to run rclone backup with parallel transfers, trash-based deletion,
@@ -987,7 +989,8 @@ class PhotoWorkflow:
 
         # Generate timestamped trash folder name
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        trash_folder = f"{HOMELAB_TRASH_PATH}/{source_name}_{timestamp}"
+        base = trash_base_path if trash_base_path is not None else HOMELAB_TRASH_PATH
+        trash_folder = f"{base}/{source_name}_{timestamp}"
         stats['trash_path'] = trash_folder
 
         # rclone on-the-fly SFTP remote (no config file needed)

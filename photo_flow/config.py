@@ -22,8 +22,11 @@ HOMELAB_SSD_FINAL_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
 # HDD backup paths (for large files - RAWs and Videos)
 HOMELAB_HDD_RAWS_PATH = Path("/mnt/hdd/fuji/RAWs")
 HOMELAB_HDD_VIDEOS_PATH = Path("/mnt/hdd/fuji/Videos")
-# Trash folder for deleted files (instead of permanent delete)
-HOMELAB_TRASH_PATH = Path("/mnt/hdd/fuji/.trash")
+# Trash folders for deleted files (must be on the same filesystem as the destination)
+HOMELAB_SSD_TRASH_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/.trash")  # Same SSD as Final
+HOMELAB_HDD_TRASH_PATH = Path("/mnt/hdd/fuji/.trash")                 # Same HDD as RAWs/Videos
+# Legacy alias - kept for any direct references
+HOMELAB_TRASH_PATH = HOMELAB_HDD_TRASH_PATH
 # Legacy alias for backwards compatibility
 HOMELAB_DEST_PATH = HOMELAB_SSD_FINAL_PATH
 # Exclude system files from backup (macOS resource forks, Windows thumbnails, etc.)
