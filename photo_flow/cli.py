@@ -8,7 +8,7 @@ import click
 import logging
 
 from photo_flow.workflow import PhotoWorkflow
-from photo_flow.console_utils import console, success, error, info, print_summary
+from photo_flow.console_utils import console, success, error, info, warning, print_summary
 from rich.table import Table
 
 # Configure logging to be silent except for errors
@@ -215,6 +215,7 @@ def backup(dry_run):
         availability = workflow.get_backup_availability(check_remote=True)
 
     connection = availability.pop('_connection', None)
+    remote_unreachable = connection is None
 
     # Build status display
     status_lines = []
@@ -234,7 +235,7 @@ def backup(dry_run):
                         f"  [green]✓[/green] {key.upper():8s} {local:,} local │ {remote:,} remote │ [green]synced[/green]"
                     )
             else:
-                status_lines.append(f"  [green]✓[/green] {key.upper():8s} {local:,} files ready")
+                status_lines.append(f"  [yellow]~[/yellow] {key.upper():8s} {local:,} files ready [dim](remote unreachable)[/dim]")
         else:
             requires = info_data.get('requires', 'Unknown')
             status_lines.append(f"  [red]✗[/red] {key.upper():8s} {requires} not connected")
@@ -244,7 +245,11 @@ def backup(dry_run):
     if connection:
         method_desc = "IPv6" if connection == "direct" else "IPv4 via VPS"
         title += f" [dim]({method_desc})[/dim]"
-    console.print(Panel(status_text, title=title, border_style="cyan"))
+    border = "yellow" if remote_unreachable else "cyan"
+    console.print(Panel(status_text, title=title, border_style=border))
+
+    if remote_unreachable:
+        warning("Could not reach homelab — check Tailscale (`tailscale status`) before proceeding")
 
     # Build menu options based on availability
     available_sources = [k for k, v in availability.items() if v['available']]
