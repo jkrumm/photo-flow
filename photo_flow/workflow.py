@@ -14,6 +14,7 @@ from typing import Dict, List
 
 from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
+    GALLERY_REMOTE_USER, GALLERY_REMOTE_HOST, GALLERY_REMOTE_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
     HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
     RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
@@ -754,15 +755,17 @@ class PhotoWorkflow:
                         env=env
                     )
 
-                # Use status spinner for rsync
+                # Use status spinner for rsync — Tailscale already encrypts the
+                # link, drop -z and use the fast cipher we use for homelab backup.
                 with show_status("Syncing to remote server", spinner="dots"):
                     rsync_process = subprocess.run(
                         [
                             "rsync",
-                            "-avz",
+                            "-a",
                             "--delete",
+                            "-e", f"ssh -T -c {RCLONE_SSH_CIPHER} -o Compression=no -o ConnectTimeout=5",
                             f"{photo_gallery_path}/dist/",
-                            "jkrumm@100.82.157.104:/home/jkrumm/sideproject-docker-stack/photo_gallery"
+                            f"{GALLERY_REMOTE_USER}@{GALLERY_REMOTE_HOST}:{GALLERY_REMOTE_PATH}/"
                         ],
                         capture_output=True,
                         text=True,

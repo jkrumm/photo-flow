@@ -88,11 +88,12 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 - Method: rsync via Tailscale (encrypted mesh network)
 - Exclusions: System files (`.DS_Store`, `._*`, `Thumbs.db`, etc.) are filtered out
 
-**Gallery Sync** (⚠️ HARDCODED in workflow.py - NOT in config.py):
+**Gallery Sync** (in config.py — `GALLERY_REMOTE_USER`/`HOST`/`PATH`):
 - User: `jkrumm`
 - Host: `100.82.157.104` (VPS Tailscale IP)
-- Path: `/home/jkrumm/sideproject-docker-stack/photo_gallery`
-- Method: rsync after npm build
+- Path: `/home/jkrumm/photo-gallery-dist` (served by nginx — see `vps/apps/photo-gallery/`)
+- Method: rsync over Tailscale (aes128-gcm, no compression) after npm build
+- Public URL: `https://photos.jkrumm.com`
 
 ### Technology Stack
 - **Python 3.9+** with venv/pipx
@@ -345,10 +346,10 @@ StatusReport:
 
 **Logging**: Uses Python's `logging` module with `logger.debug()` for debug output and `logger.error()` for errors
 
-**Remote Destination (HARDCODED - NOT in config.py):**
-- Location: workflow.py:~765
-- Value: `jkrumm@100.82.157.104:/home/jkrumm/sideproject-docker-stack/photo_gallery` (VPS Tailscale IP)
-- TODO: Move to config.py
+**Remote Destination (config.py):**
+- `GALLERY_REMOTE_USER` / `GALLERY_REMOTE_HOST` / `GALLERY_REMOTE_PATH`
+- Resolves to: `jkrumm@100.82.157.104:/home/jkrumm/photo-gallery-dist`
+- The VPS serves that directory via nginx (`vps/apps/photo-gallery/compose.yml`) behind Traefik at `https://photos.jkrumm.com`
 
 **Returns:**
 ```python
@@ -557,18 +558,13 @@ def photoflow()
 **Current filter**: `if rating >= 4:`
 **To change threshold**: Modify comparison value (e.g., `>= 3` for 3+ stars)
 
-### 4. Moving Hardcoded Gallery Remote to Config
-**Current**: workflow.py:683 (hardcoded string)
-**Target**: config.py (new constants)
-**Steps:**
-1. Add to config.py:
-   ```python
-   GALLERY_REMOTE_USER = "jkrumm"
-   GALLERY_REMOTE_HOST = "100.82.157.104"  # VPS Tailscale IP
-   GALLERY_REMOTE_PATH = Path("/home/jkrumm/sideproject-docker-stack/photo_gallery")
-   ```
-2. Update workflow.py:683: Use config constants
-3. Test: `photoflow sync-gallery --dry-run`
+### 4. Changing the Gallery Remote Destination
+**Location**: `config.py` — `GALLERY_REMOTE_USER` / `GALLERY_REMOTE_HOST` / `GALLERY_REMOTE_PATH`
+**To repoint** (e.g., new server or path):
+1. Update the constants in `config.py`
+2. Ensure the destination directory exists on the remote
+3. If on a new server, ensure the host serves it via nginx + Traefik (see `vps/apps/photo-gallery/`)
+4. Test: `photoflow sync-gallery --dry-run`
 
 ### 5. Changing Hash Algorithm
 **Location**: `file_manager.py:get_file_hash()`
@@ -944,24 +940,22 @@ pipx uninstall photo-flow
 
 ## Known Limitations
 
-1. **Hardcoded gallery remote**: workflow.py:~815 (should move to config.py for consistency)
-2. **Single camera support**: Hardcoded to Fuji X-T4 volume name
-3. **No progress persistence**: Interrupted operations start from beginning
-4. **No undo mechanism**: Operations are permanent (dry-run recommended)
-5. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicate detection)
-6. **Personal tool**: Designed for single-user local execution, not production deployment
+1. **Single camera support**: Hardcoded to Fuji X-T4 volume name
+2. **No progress persistence**: Interrupted operations start from beginning
+3. **No undo mechanism**: Operations are permanent (dry-run recommended)
+4. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicate detection)
+5. **Personal tool**: Designed for single-user local execution, not production deployment
 
 ---
 
 ## Future Improvements (Optional)
 
-1. Move gallery remote destination to config.py
-2. Add progress persistence for resumable operations
-3. Support multiple camera models (configurable volume names)
-4. Add undo/rollback mechanism for operations
-5. Unit tests for safety mechanisms
-6. Integration tests for full workflow
-7. Performance metrics logging
+1. Add progress persistence for resumable operations
+2. Support multiple camera models (configurable volume names)
+3. Add undo/rollback mechanism for operations
+4. Unit tests for safety mechanisms
+5. Integration tests for full workflow
+6. Performance metrics logging
 8. Add --verbose CLI flag for enhanced debugging output
 
 ---
@@ -973,6 +967,15 @@ pipx uninstall photo-flow
 ---
 
 ## Recent Changes
+
+### v0.3.3 - Gallery Deployment Moved to New VPS (May 2026)
+**Old `sideproject-docker-stack` was decommissioned; gallery now deploys to the new VPS stack:**
+
+1. **Hardcoded path removed**: rsync destination at `workflow.py:~765` moved to `config.py` (`GALLERY_REMOTE_USER` / `GALLERY_REMOTE_HOST` / `GALLERY_REMOTE_PATH`)
+2. **New destination**: `jkrumm@100.82.157.104:/home/jkrumm/photo-gallery-dist`
+3. **New serving stack**: nginx container in `vps/apps/photo-gallery/compose.yml`, behind Traefik + cloudflared at `https://photos.jkrumm.com`
+4. **rsync tuned for Tailscale**: dropped `-z`, switched to `aes128-gcm@openssh.com` cipher with `Compression=no` (matches `backup_final_to_homelab`)
+5. **Known Limitation #1 fixed** — hardcoded gallery remote is gone
 
 ### v0.3.2 - RAW Storage Migration to External Drive (February 2025)
 **Moves RAW storage from laptop to external SSD to free local disk space:**
