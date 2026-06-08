@@ -90,7 +90,7 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 
 **Gallery Sync** (in config.py — `GALLERY_REMOTE_USER`/`HOST`/`PATH`):
 - User: `jkrumm`
-- Host: `100.82.157.104` (VPS Tailscale IP)
+- Host: `100.97.220.54` (VPS Tailscale IP)
 - Path: `/home/jkrumm/photo-gallery-dist` (served by nginx — see `vps/apps/photo-gallery/`)
 - Method: rsync over Tailscale (aes128-gcm, no compression) after npm build
 - Public URL: `https://photos.jkrumm.com`
@@ -348,7 +348,7 @@ StatusReport:
 
 **Remote Destination (config.py):**
 - `GALLERY_REMOTE_USER` / `GALLERY_REMOTE_HOST` / `GALLERY_REMOTE_PATH`
-- Resolves to: `jkrumm@100.82.157.104:/home/jkrumm/photo-gallery-dist`
+- Resolves to: `jkrumm@100.97.220.54:/home/jkrumm/photo-gallery-dist`
 - The VPS serves that directory via nginx (`vps/apps/photo-gallery/compose.yml`) behind Traefik at `https://photos.jkrumm.com`
 
 **Returns:**
@@ -972,7 +972,7 @@ pipx uninstall photo-flow
 **Old `sideproject-docker-stack` was decommissioned; gallery now deploys to the new VPS stack:**
 
 1. **Hardcoded path removed**: rsync destination at `workflow.py:~765` moved to `config.py` (`GALLERY_REMOTE_USER` / `GALLERY_REMOTE_HOST` / `GALLERY_REMOTE_PATH`)
-2. **New destination**: `jkrumm@100.82.157.104:/home/jkrumm/photo-gallery-dist`
+2. **New destination**: `jkrumm@100.97.220.54:/home/jkrumm/photo-gallery-dist`
 3. **New serving stack**: nginx container in `vps/apps/photo-gallery/compose.yml`, behind Traefik + cloudflared at `https://photos.jkrumm.com`
 4. **rsync tuned for Tailscale**: dropped `-z`, switched to `aes128-gcm@openssh.com` cipher with `Compression=no` (matches `backup_final_to_homelab`)
 5. **Known Limitation #1 fixed** — hardcoded gallery remote is gone

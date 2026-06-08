@@ -17,7 +17,7 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 # Gallery deployment (VPS) — static Astro site rsynced to a host directory
 # served by nginx (vps repo: apps/photo-gallery/). Public at photos.jkrumm.com.
 GALLERY_REMOTE_USER = "jkrumm"
-GALLERY_REMOTE_HOST = "100.82.157.104"  # VPS Tailscale IP
+GALLERY_REMOTE_HOST = "100.97.220.54"  # VPS Tailscale IP (matches ~/.ssh/config "vps")
 GALLERY_REMOTE_PATH = Path("/home/jkrumm/photo-gallery-dist")
 
 # Remote backup (homelab) settings
