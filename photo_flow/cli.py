@@ -112,8 +112,8 @@ def finalize(dry_run):
         error(f"Finalization completed with {stats['errors']} errors")
 
     print_summary("Finalization Results", {
-        "Files moved to Final folder": stats['moved'],
-        "Files compressed (5200×3467, Q92, 4:4:4)": stats.get('compressed', 0),
+        "Files moved to Final folder (full quality)": stats['moved'],
+        "Edit sidecars moved (.photo-edit)": stats.get('edits_moved', 0),
         "Orphaned RAW files found": stats['orphaned_raws'],
         "Orphaned RAW files deleted": stats['deleted_raws'],
         "RAW files deleted from camera": stats['deleted_camera_raws'],

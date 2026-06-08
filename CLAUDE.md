@@ -16,7 +16,7 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 | Import Videos | Camera/*.MOV | SSD_PATH | ✅ Yes | ✅ Yes | System files |
 | Import Photos | Camera/*.JPG | STAGING_PATH | ✅ Yes | ✅ Yes | System files + already in Final |
 | Import RAWs | Camera/*.RAF | RAWS_PATH (SSD) | ✅ Yes | ✅ Yes | System files |
-| Finalize | STAGING/*.JPG | FINAL_PATH (compress + move) | ✅ Yes | ✅ Yes | None |
+| Finalize | STAGING/*.JPG (+ .photo-edit) | FINAL_PATH (move, full quality) | ✅ Yes | ✅ Yes | None |
 | Gallery Sync | FINAL/*.JPG (rating ≥ 4) | GALLERY_PATH/images | ❌ No | ✅ Yes | Rating-based |
 | Migrate | Any folder | Same folder (rename in-place) | ✅ Yes (atomic) | ✅ Yes | Already renamed |
 
@@ -164,6 +164,10 @@ class FileManager:
 
 ### 2. Image Processor (`image_processor.py`)
 
+> **Not used by the pipeline since v0.3.4.** Finalize no longer re-compresses (full-quality
+> masters). This module is retained for reference / possible opt-in compression, but no command
+> currently calls it.
+
 ```python
 class ImageProcessor:
     @staticmethod
@@ -278,13 +282,16 @@ StatusReport:
 ```
 
 #### `finalize_staging(dry_run=False, progress_callback=None) -> Dict[str, int]`
-**Process (4 steps with separate Rich Progress bars):**
-1. **Atomic Compress+Move**: For each Staging JPG (one at a time):
-   - Compress to temp file (5200×3467, quality 92, 4:4:4 chroma, preserve metadata)
-   - Copy temp → Final (safe_copy with hash verify)
-   - Delete from Staging (only if copy succeeded)
+**Process (3 steps with separate Rich Progress bars):**
+1. **Atomic Move (full quality, no re-compression)**: For each Staging JPG (one at a time):
+   - Copy Staging JPG → Final byte-for-byte (safe_copy with hash verify) — **no re-encoding**
+   - Move the matching `.photo-edit` sidecar (Photomator edit history) alongside its JPG, if present
+   - Delete from Staging (only after the verified copy)
    - **Interrupt-safe**: Remaining files stay in Staging, retry processes them
-   - **Output**: Progress bar for compression/move operations
+   - **Why no compression**: Photomator bakes its edits and embeds the star rating into the
+     JPG itself, so the Staging JPG is already the finished full-quality master. The web
+     gallery downscales on demand (Astro + sharp), so Final never needs to be small.
+   - **Output**: Progress bar for move operations
 2. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
    - **Output**: Info messages for each deletion
 3. **Cleanup orphaned RAWs**: Local RAFs without matching Final JPG
@@ -293,8 +300,8 @@ StatusReport:
 **Returns:**
 ```python
 {
-    'moved': int,                # JPGs moved from staging
-    'compressed': int,           # JPGs compressed
+    'moved': int,                # JPGs moved from staging to Final
+    'edits_moved': int,          # .photo-edit sidecars moved alongside their JPGs
     'orphaned_raws': int,        # Local RAWs found without Final JPG
     'deleted_raws': int,         # Local orphaned RAWs deleted
     'deleted_camera_raws': int,  # Camera RAWs deleted
@@ -498,27 +505,31 @@ def photoflow()
 **Implementation**: Hash comparison for files with matching original base names
 
 ### Atomic Finalize Workflow (Critical Architecture)
-**Location**: workflow.py:finalize_staging() lines ~262-336
-**Pattern**: Compress-then-copy per file
+**Location**: workflow.py:finalize_staging()
+**Pattern**: Verified copy-then-delete per file (full quality, no re-compression)
 
 **Flow for each Staging file:**
 ```python
-1. Compress staging_file → temp_file (5200×3467, Q92, 4:4:4)
-2. safe_copy(temp_file → Final) with hash verify
-3. Delete from Staging (only if step 2 succeeded)
-4. Cleanup temp_file
+1. safe_copy(staging_file → Final) with hash verify   # byte-for-byte, no re-encode
+2. If a matching <stem>.photo-edit sidecar exists: safe_copy it → Final, then delete it from Staging
+3. Delete staging JPG (only after step 1 verified)
 ```
 
 **Architecture guarantees:**
 - ✅ **Atomic per-file**: Each file fully processed or stays in Staging
 - ✅ **Interrupt-safe**: Ctrl+C at any point leaves consistent state
 - ✅ **Idempotent**: Re-running processes remaining Staging files
-- ✅ **No uncompressed files in Final**: Every Final file is guaranteed compressed
+- ✅ **No quality loss**: Final JPGs are byte-identical to the Photomator-edited masters
+- ✅ **Edit history preserved**: `.photo-edit` sidecars travel with their JPG (re-editable in Photomator)
 - ✅ **Retry-friendly**: Failed files stay in Staging for next run
 
-**Why this matters:**
-- Old approach: Move all → Compress all (could leave uncompressed files in Final)
-- New approach: Compress → Move (atomic unit, never uncompressed in Final)
+**Why no compression (changed in v0.3.4):**
+- Photomator (with "modify originals" on) bakes its pixel edits AND embeds the star rating
+  into the JPG itself. The Staging JPG is already the finished, full-quality master.
+- Re-encoding it (the old 5200×3467 / Q92 step) only added generation loss and would orphan
+  the `.photo-edit` history. Storage is cheap (homelab + external SSD); irreplaceable quality is not.
+- The only consumer that needs small images is the web gallery, which downscales on demand at
+  build time (Astro `<Image>` + sharp). Immich generates its own thumbnails.
 
 ### Delete Behavior Specifics
 - **Import videos**: ✅ Deleted from camera after successful copy (MOVE operation)
@@ -817,8 +828,8 @@ photoflow backup --dry-run
          ▼                  ▼
     ┌──────────────────────────┐
     │   Final/                 │
-    │   Compressed JPGs        │
-    │   (5200×3467, q=92, 4:4:4)│
+    │   Full-quality JPGs      │
+    │   (+ .photo-edit history)│
     └────┬─────────────────┬───┘
          │                 │
          │ backup          │ sync-gallery (rating ≥ 4)
@@ -960,13 +971,39 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.3.0
-**Last Updated**: January 2025
+**Version**: 0.3.4
+**Last Updated**: June 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.3.4 - Full-Quality Masters + Photomator/Immich Workflow (June 2026)
+**Adopted Photomator for editing/rating and stopped degrading Final JPGs:**
+
+1. **Finalize no longer re-compresses** (`workflow.py:finalize_staging`): replaced the per-file
+   *compress → copy → delete* with a *verified copy → delete* at full quality. The
+   `ImageProcessor`/`compress_jpeg_safe` path and the `tempfile` import are no longer used by the
+   pipeline (the module is retained for reference). Stat key `compressed` → `edits_moved`.
+2. **`.photo-edit` sidecars travel with their JPG**: Photomator stores its re-editable edit history
+   in a `<stem>.photo-edit` file (~17 MB each). Finalize moves it alongside the JPG into Final so
+   finalized photos stay non-destructively editable; backup carries them up (rclone syncs the whole
+   Final dir; `.photo-edit` is not excluded — Immich ignores non-image files).
+3. **Rating model**: with Photomator's "modify originals" enabled, edits are **baked into the JPG**
+   and the star rating is **embedded** as `XMP-xmp:Rating`. So the existing embedded-XMP reader
+   (`metadata_extractor`) and Immich both pick ratings up directly — there is **no `.xmp` sidecar**.
+   Photomator is the single source of truth for ratings/edits.
+
+**Immich integration (was undocumented):**
+- `immich_client.py` triggers an Immich **external-library rescan** after a successful backup
+  (`trigger_immich_scan()`, configured via `.env`: `IMMICH_URL`, `IMMICH_API_KEY`).
+- Immich mounts the homelab backup folder `…/Bilder/Fuji` **read-only** as an external library
+  (`homelab/docker-compose.yml`, exposed at `/mnt/media/fuji:ro`). It is a **read-only viewer**:
+  it reads embedded ratings/metadata but **cannot write back** — ratings/tags created *in* Immich
+  stay only in its Postgres DB and never reach the files. **Rate in Photomator, not in Immich.**
+- Data flow is strictly one-way: Photomator (local, embeds rating + bakes edit) → backup push →
+  Immich rescan. Nothing syncs from Immich back to local Final.
 
 ### v0.3.3 - Gallery Deployment Moved to New VPS (May 2026)
 **Old `sideproject-docker-stack` was decommissioned; gallery now deploys to the new VPS stack:**

@@ -6,7 +6,6 @@ This module provides the main workflow logic for the application.
 import logging
 import os
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
@@ -20,7 +19,6 @@ from photo_flow.config import (
     RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
-from photo_flow.image_processor import ImageProcessor
 from photo_flow.metadata_extractor import MetadataExtractor
 from photo_flow.console_utils import console, create_progress, show_status, info, warning, error
 from photo_flow.immich_client import trigger_immich_scan
@@ -52,7 +50,6 @@ class PhotoWorkflow:
     def __init__(self):
         """Initialize the PhotoWorkflow instance."""
         self.file_manager = FileManager()
-        self.image_processor = ImageProcessor()
 
     def _process_files(self, files: List[Path], destination: Path,
                        file_type: str, progress_callback=None, dry_run=False,
@@ -300,7 +297,7 @@ class PhotoWorkflow:
 
         stats = {
             'moved': 0,
-            'compressed': 0,
+            'edits_moved': 0,
             'orphaned_raws': 0,
             'deleted_raws': 0,
             'deleted_camera_raws': 0,
@@ -322,15 +319,23 @@ class PhotoWorkflow:
         if not dry_run:
             FINAL_PATH.mkdir(parents=True, exist_ok=True)
 
-        # Step 1: Compress and move staging files to Final
+        # Step 1: Move staging files to Final at full quality (no re-compression).
+        # Photomator bakes its edits and embeds the star rating into the JPG itself,
+        # so the staging JPG is already the finished, full-quality master. Re-encoding
+        # it would only add generation loss, and the web gallery already downscales on
+        # demand (Astro + sharp). Photomator's .photo-edit sidecar (the re-editable
+        # history) travels with its JPG so finalized photos stay non-destructively editable.
         with create_progress() as progress:
             task = progress.add_task(
-                f"[cyan]Compressing & moving {len(staging_files)} photos to Final",
+                f"[cyan]Moving {len(staging_files)} photos to Final",
                 total=len(staging_files)
             )
 
             for staging_file in staging_files:
                 final_path = FINAL_PATH / staging_file.name
+                sidecar_src = staging_file.with_suffix('.photo-edit')
+                sidecar_dst = FINAL_PATH / sidecar_src.name
+                has_sidecar = sidecar_src.exists()
 
                 # Check for duplicates
                 if final_path.exists():
@@ -342,44 +347,40 @@ class PhotoWorkflow:
 
                 if dry_run:
                     stats['moved'] += 1
-                    stats['compressed'] += 1
+                    if has_sidecar:
+                        stats['edits_moved'] += 1
                 else:
-                    # ATOMIC: Compress → Copy → Delete
-                    temp_compressed = None
-                    try:
-                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-                            temp_compressed = Path(tmp.name)
+                    # ATOMIC per file: Copy (hash-verified) → Delete. Interrupt-safe:
+                    # an unfinished file simply stays in Staging for the next run.
+                    copy_success, copy_error = self.file_manager.safe_copy(staging_file, final_path)
 
-                        compress_success, compress_error = self.image_processor.compress_jpeg_safe(
-                            staging_file, output_path=temp_compressed
-                        )
+                    if not copy_success:
+                        error(f"Failed to copy {staging_file.name} to Final: {copy_error}")
+                        stats['errors'] += 1
+                        progress.advance(task)
+                        continue
 
-                        if not compress_success:
-                            error(f"Failed to compress {staging_file.name}: {compress_error}")
-                            stats['errors'] += 1
-                            progress.advance(task)
-                            continue
-
-                        copy_success, copy_error = self.file_manager.safe_copy(temp_compressed, final_path)
-
-                        if copy_success:
+                    # Move the .photo-edit sidecar alongside its JPG (hash-verified copy).
+                    if has_sidecar:
+                        sc_success, sc_error = self.file_manager.safe_copy(sidecar_src, sidecar_dst)
+                        if sc_success:
                             try:
-                                staging_file.unlink()
-                                stats['moved'] += 1
-                                stats['compressed'] += 1
+                                sidecar_src.unlink()
+                                stats['edits_moved'] += 1
                             except Exception as e:
-                                error(f"Failed to delete staging file {staging_file.name}: {e}")
+                                error(f"Failed to delete staging sidecar {sidecar_src.name}: {e}")
                                 stats['errors'] += 1
                         else:
-                            error(f"Failed to copy {staging_file.name} to Final: {copy_error}")
+                            error(f"Failed to copy sidecar {sidecar_src.name} to Final: {sc_error}")
                             stats['errors'] += 1
 
-                    finally:
-                        if temp_compressed and temp_compressed.exists():
-                            try:
-                                temp_compressed.unlink()
-                            except Exception:
-                                pass
+                    # Remove the staging JPG only after its own verified copy succeeded.
+                    try:
+                        staging_file.unlink()
+                        stats['moved'] += 1
+                    except Exception as e:
+                        error(f"Failed to delete staging file {staging_file.name}: {e}")
+                        stats['errors'] += 1
 
                 progress.advance(task)
 
