@@ -119,13 +119,13 @@ is the SSE stream; `GET /jobs/{job_id}` the terminal result. Confirmation flow:
 
 - New console entry `photoflow serve` (uvicorn) + `python -m photo_flow.api`.
 - **LaunchAgent** (matching usage-tracker/audio-proxy pattern) keeps uvicorn alive, bound to
-  `127.0.0.1:7720`. Optional Caddy `photoflow.test` HTTPS entry + dotfiles commit.
+  `127.0.0.1:7717`. Optional Caddy `photoflow.test` HTTPS entry + dotfiles commit.
 - Add `fastapi`, `uvicorn`, `sse-starlette` to `setup.py`/`requirements.txt` (currently out of sync —
   also re-add `python-dotenv`).
 
 ## Decisions made (challenge if wrong)
 
-- Port **7720**, bind localhost only. Index at `~/.photoflow/index.db`.
+- Port **7717**, bind localhost only. Index at `~/.photoflow/index.db`.
 - FastAPI lives **inside the package** (`photo_flow/api/`) so it imports the core trivially and
   ships with the install; SPA lives in **`control_panel/web/`**, served static by FastAPI.
 - Type-safe client via **openapi-typescript** (not Eden — backend is FastAPI, not Elysia).
@@ -136,7 +136,7 @@ is the SSE stream; `GET /jobs/{job_id}` the terminal result. Confirmation flow:
 
 ## Success criteria
 
-- `photoflow serve` runs under a LaunchAgent; opening `http://localhost:7720` shows live pipeline
+- `photoflow serve` runs under a LaunchAgent; opening `http://localhost:7717` shows live pipeline
   status that updates within ~3s of plugging in the camera.
 - Every CLI operation is triggerable from the UI with a dry-run-preview confirm and live progress;
   destructive ops cannot run concurrently (single-flight) and cannot be reached off-localhost.

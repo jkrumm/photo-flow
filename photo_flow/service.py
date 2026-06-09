@@ -2,7 +2,7 @@
 LaunchAgent management for the Photo-Flow control panel.
 
 Renders and installs a macOS LaunchAgent that keeps `photoflow serve` running at
-http://127.0.0.1:7720. Paths are resolved dynamically (works for venv or pipx
+http://127.0.0.1:7717. Paths are resolved dynamically (works for venv or pipx
 installs) rather than hardcoded, so a moved repo or different interpreter still
 produces a valid plist.
 """
@@ -18,7 +18,7 @@ from photo_flow.console_utils import success, error, info, warning
 LABEL = "com.jkrumm.photoflow"
 PLIST_NAME = f"{LABEL}.plist"
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 7720
+DEFAULT_PORT = 7717
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = REPO_ROOT / "control_panel" / "web"

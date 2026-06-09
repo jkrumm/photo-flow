@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Photo-Flow Control Panel — LaunchAgent
-  Keeps `photoflow serve` running at http://127.0.0.1:7720 under launchd.
+  Keeps `photoflow serve` running at http://127.0.0.1:7717 under launchd.
 
   Install:
     cp control_panel/launchd/com.jkrumm.photoflow.plist ~/Library/LaunchAgents/
@@ -31,7 +31,7 @@
     <string>--host</string>
     <string>127.0.0.1</string>
     <string>--port</string>
-    <string>7720</string>
+    <string>7717</string>
   </array>
 
   <key>WorkingDirectory</key>

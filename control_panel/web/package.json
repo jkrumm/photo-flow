@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --port 7721 --strictPort",
+    "dev": "vite --port 7718 --strictPort",
     "build": "tsr generate && vite build",
-    "preview": "vite preview --port 7721 --strictPort",
+    "preview": "vite preview --port 7718 --strictPort",
     "lint": "oxlint src && node scripts/check-hex.mjs",
-    "gen:api": "openapi-typescript http://127.0.0.1:7720/openapi.json -o src/lib/api-types.ts"
+    "gen:api": "openapi-typescript http://127.0.0.1:7717/openapi.json -o src/lib/api-types.ts"
   },
   "dependencies": {
     "@mantine/core": "^9.2.1",

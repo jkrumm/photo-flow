@@ -2,7 +2,7 @@
  * API types — hand-crafted snapshot matching photo_flow/api/ Pydantic models.
  *
  * Regenerate from a live server with:
- *   npm run gen:api   (requires photoflow serve running on :7720)
+ *   npm run gen:api   (requires photoflow serve running on :7717)
  *
  * Keep this in sync with photo_flow/api/routes_*.py when Pydantic models change.
  */

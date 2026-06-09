@@ -6,7 +6,7 @@ A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging w
 
 ## Control Panel
 
-A local-only web UI lives at `http://localhost:7720` — pipeline status, operation triggers with live progress, and analytics over the photo library.
+A local-only web UI lives at `http://localhost:7717` — pipeline status, operation triggers with live progress, and analytics over the photo library.
 
 ### Build & run
 
@@ -16,7 +16,7 @@ cd control_panel/web && npm install && npm run build && cd ../..
 
 # Start the server
 photoflow serve
-# → http://localhost:7720
+# → http://localhost:7717
 ```
 
 ### Install as always-on daemon (launchd)
@@ -31,11 +31,11 @@ To uninstall: `launchctl unload ~/Library/LaunchAgents/com.jkrumm.photoflow.plis
 
 ### Optional: HTTPS via Caddy
 
-Add to `~/dotfiles/config/Caddyfile` (port 7721 = Vite dev; 7720 = prod):
+Add to `~/dotfiles/config/Caddyfile` (port 7718 = Vite dev; 7717 = prod):
 
 ```
 photoflow.test {
-  reverse_proxy 127.0.0.1:7720
+  reverse_proxy 127.0.0.1:7717
 }
 ```
 
@@ -89,8 +89,8 @@ That's it! No virtual environments to activate, works from any directory. ✨
 ### `photoflow serve`
 Start the web control panel:
 ```bash
-photoflow serve                        # http://127.0.0.1:7720 (default)
-photoflow serve --port 7720 --host 127.0.0.1
+photoflow serve                        # http://127.0.0.1:7717 (default)
+photoflow serve --port 7717 --host 127.0.0.1
 ```
 Serves the built SPA + API on the same origin. Requires `npm run build` in `control_panel/web/` first. The PWA manifest lets you install it as a desktop app.
 

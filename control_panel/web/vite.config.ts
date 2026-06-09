@@ -5,7 +5,7 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { resolve } from 'path'
 
-const apiTarget = process.env['VITE_API_TARGET'] ?? 'http://127.0.0.1:7720'
+const apiTarget = process.env['VITE_API_TARGET'] ?? 'http://127.0.0.1:7717'
 
 export default defineConfig({
   plugins: [
@@ -28,7 +28,7 @@ export default defineConfig({
     }),
   ],
   server: {
-    port: 7721,
+    port: 7718,
     strictPort: true,
     allowedHosts: ['photoflow.test'],
     proxy: {

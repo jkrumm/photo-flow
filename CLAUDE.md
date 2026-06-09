@@ -112,7 +112,7 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 - **Vite 8 + React 19 + TanStack Router/Query + Mantine 9** — SPA (`control_panel/web/`)
 - **framer-motion** — animated pipeline hero
 - **visx** (`@argo/charts` vendored) — analytics charts with Blueprint token system
-- Port: `127.0.0.1:7720` (localhost only, never exposed)
+- Port: `127.0.0.1:7717` (localhost only, never exposed)
 
 ### Control Panel Architecture
 
@@ -128,7 +128,7 @@ photo_flow/ (Python core — unchanged)
        └── photo_flow/index/ (SQLite metadata cache at ~/.photoflow/index.db)
 
 control_panel/web/       Vite React SPA (build → dist/ served by FastAPI)
-control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7720)
+control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7717)
 ```
 
 **Event seam:** `ProgressReporter` protocol — `RichReporter` for CLI (Rich bars unchanged),
@@ -138,8 +138,8 @@ control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7720
 `POST /ops/{name}` → SSE stream at `GET /events/{job_id}` → terminal result at `GET /jobs/{job_id}`.
 
 **Serving:** `photoflow serve` runs uvicorn; FastAPI mounts the built SPA at `/` with a catch-all
-SPA fallback after all `/api`-prefixed routes are registered. Dev: Vite on port 7721 proxies
-`/health`, `/status`, `/ops`, `/jobs`, `/events`, `/analytics`, `/index`, `/backup` to 7720.
+SPA fallback after all `/api`-prefixed routes are registered. Dev: Vite on port 7718 proxies
+`/health`, `/status`, `/ops`, `/jobs`, `/events`, `/analytics`, `/index`, `/backup` to 7717.
 
 ---
 
@@ -1017,7 +1017,7 @@ pipx uninstall photo-flow
 ## Recent Changes
 
 ### v0.4.0 - Control Panel (June 2026)
-**Added a local-only always-on web control panel at `http://localhost:7720`:**
+**Added a local-only always-on web control panel at `http://localhost:7717`:**
 
 1. **`photo_flow/api/`** — FastAPI server (uvicorn + sse-starlette) that imports `PhotoWorkflow`
    in-process. Routers: `routes_status` (cheap poll + pending scan), `routes_ops` (dry-run preview +
@@ -1030,7 +1030,7 @@ pipx uninstall photo-flow
    Pipeline hero (framer-motion, live counts), Operations (dry-run confirm modals + SSE progress),
    Analytics (visx charts over the SQLite index), Library Health (backup freshness, orphaned RAWs).
    Vendored `@argo/charts` (visx) + Blueprint token system (CSS-var palette). PWA manifest.
-4. **`photoflow serve`** — new CLI command; runs uvicorn on `127.0.0.1:7720`. FastAPI serves the
+4. **`photoflow serve`** — new CLI command; runs uvicorn on `127.0.0.1:7717`. FastAPI serves the
    built SPA static files with SPA catch-all fallback after registering all API routes.
 5. **`control_panel/launchd/com.jkrumm.photoflow.plist`** — LaunchAgent (`KeepAlive`, `RunAtLoad`).
    Install: `cp … ~/Library/LaunchAgents/ && launchctl load …`.

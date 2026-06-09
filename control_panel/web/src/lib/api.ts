@@ -2,7 +2,7 @@
  * Typed API client — thin fetch wrapper over the photo-flow FastAPI backend.
  *
  * All requests are same-origin in production (FastAPI serves both SPA and API).
- * In dev, Vite proxies path prefixes to the uvicorn process on :7720.
+ * In dev, Vite proxies path prefixes to the uvicorn process on :7717.
  *
  * Usage:
  *   import { api } from './api'
