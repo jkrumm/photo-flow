@@ -23,12 +23,29 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from photo_flow.index.indexer import reindex as _run_reindex
 from photo_flow.progress import NullReporter
 from photo_flow.workflow import PhotoWorkflow
 
 router = APIRouter()
 
 _workflow = PhotoWorkflow()
+
+
+def _with_reindex(fn):
+    """Wrap a job function to trigger an incremental reindex on successful completion.
+
+    The reindex runs in the same worker thread immediately after the op finishes.
+    Errors in the reindex are swallowed so they never fail the job itself.
+    """
+    def wrapped(reporter):
+        result = fn(reporter)
+        try:
+            _run_reindex()
+        except Exception:
+            pass
+        return result
+    return wrapped
 
 # ---------------------------------------------------------------------------
 # Response models — referenced in OpenAPI so Group 8 can generate TS types
@@ -215,7 +232,7 @@ async def op_finalize(request: Request, dry_run: bool = False):
     return await _start_job(
         request,
         "finalize",
-        lambda reporter: _workflow.finalize_staging(dry_run=False, reporter=reporter),
+        _with_reindex(lambda reporter: _workflow.finalize_staging(dry_run=False, reporter=reporter)),
     )
 
 
@@ -260,7 +277,7 @@ async def op_sync_gallery(request: Request, dry_run: bool = False):
     return await _start_job(
         request,
         "sync-gallery",
-        lambda reporter: _workflow.sync_gallery(dry_run=False, reporter=reporter),
+        _with_reindex(lambda reporter: _workflow.sync_gallery(dry_run=False, reporter=reporter)),
     )
 
 

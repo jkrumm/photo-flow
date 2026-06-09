@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from photo_flow.api.jobs import JobManager
+from photo_flow.api.routes_analytics import router as analytics_router
 from photo_flow.api.routes_jobs import router as jobs_router
 from photo_flow.api.routes_ops import router as ops_router
 from photo_flow.api.routes_status import router as status_router
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(status_router)
     app.include_router(jobs_router)
     app.include_router(ops_router)
+    app.include_router(analytics_router)
 
     return app
 

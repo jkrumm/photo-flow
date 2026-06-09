@@ -206,3 +206,40 @@ guards, and auto-open/close of the default DB).
   helper would cap DB growth for large libraries.
 - `published` is checked via filesystem presence at index time; a post-sync hook that calls
   `reindex()` incrementally would keep it more current than a periodic poll.
+
+## Group 7: Analytics API — aggregation endpoints + index refresh hooks
+
+### What was implemented
+Created `photo_flow/api/routes_analytics.py` with six `GET /analytics/*` endpoints (over-time, ratings, settings, storage, map, summary) plus `POST /index/refresh`. Registered the analytics router in `app.py`. Added a `_with_reindex` wrapper in `routes_ops.py` that triggers incremental reindex on successful completion of finalize and sync-gallery jobs. Added 30 tests in `tests/test_api_analytics.py`.
+
+### Deviations from prompt
+- `/index/refresh` is an inline async endpoint (not routed through the job manager) since it is a fast, idempotent read-heavy operation. A simple `asyncio.Lock` prevents concurrent refreshes and returns 409 if already running — lighter than a full `JobManager` job.
+- Storage endpoint reads Final bytes/count from the index (not disk) and uses direct `Path.glob` for Staging/RAWs/Videos. This avoids scanning Final at request time while still reporting other stages accurately.
+- `_with_reindex` swallows reindex errors so a failing scan (e.g. no Final folder) never fails the job result that triggered it.
+
+### Gotchas & surprises
+- `asyncio.Lock()` is initialized lazily (`_get_refresh_lock()`) to avoid binding to a non-running event loop at module import time (Python 3.9 behavior).
+- SQLite `COALESCE(SUM(...), 0)` is required: `SUM()` over zero rows returns NULL, not 0, which would break Pydantic validation of `int` fields.
+- Monkeypatching module-level config constants (`STAGING_PATH`, `RAWS_PATH`, etc.) in `routes_analytics` works because Python imports bind names into the module namespace — `monkeypatch.setattr(analytics_mod, "STAGING_PATH", ...)` replaces the name the module uses.
+- `_run_reindex` in `routes_ops` is a module-level reference to `reindex()` imported at the top. The `_with_reindex` closure captures this reference, so tests can monkeypatch `ops_mod._run_reindex` directly.
+
+### Security notes
+- All SQL uses parameterized queries (no string interpolation of user input anywhere).
+- `/index/refresh` runs `reindex()` which only reads files and writes the index — no deletions.
+- Analytics endpoints are read-only; no state mutation.
+
+### Tests added
+`tests/test_api_analytics.py` — 30 tests:
+- `TestOverTime` (6): month/year/day bucketing, rating-band split, excluded rows, invalid bucket → 422.
+- `TestRatings` (3): histogram presence, total_final/published counts, exclusion check.
+- `TestSettings` (5): ISO/aperture/focal distributions, shutter count + human-readable labels.
+- `TestStorage` (3): Final bytes from index, unavailable stages return 0, staging file counting.
+- `TestMap` (4): GPS filtering, point shape, coordinate values, excluded-row exclusion.
+- `TestSummary` (5): total_photos, published, avg_rating, date range, this_month=0.
+- `TestIndexRefresh` (2): returns counts from reindex, response schema.
+- `TestAutoReindex` (2): `_with_reindex` wraps fn + triggers reindex, swallows reindex errors.
+
+### Future improvements
+- `/index/refresh` could stream progress via SSE if `reindex()` gained a progress callback.
+- The storage endpoint's Staging/RAWs/Videos glob is case-sensitive (`*.JPG`, `*.RAF`, `*.MOV`); a case-insensitive glob would be more robust.
+- Analytics results are not cached; for a large library (10k+ photos) the SQLite aggregations are still fast (< 50ms with WAL), but adding an in-memory TTL cache would help if hot-polling is ever added.
