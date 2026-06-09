@@ -9,7 +9,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
@@ -21,6 +21,7 @@ from photo_flow.config import (
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.metadata_extractor import MetadataExtractor
 from photo_flow.console_utils import console, create_progress, show_status, info, warning, error
+from photo_flow.progress import ProgressReporter, RichReporter
 from photo_flow.immich_client import trigger_immich_scan
 from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, is_already_renamed
 
@@ -125,12 +126,18 @@ class PhotoWorkflow:
                     merged[key] += stats[key]
         return merged
 
-    def import_from_camera(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+    def import_from_camera(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, int]:
         """
         Import files from the camera to the appropriate locations.
         Excludes files that are already in the Final folder to avoid re-staging finalized photos.
         """
-        from photo_flow.console_utils import create_progress, info
+        if reporter is None:
+            reporter = RichReporter()
 
         # Check camera connection
         if not CAMERA_PATH.exists():
@@ -200,10 +207,10 @@ class PhotoWorkflow:
             RAWS_PATH: {f.name for f in RAWS_PATH.glob('*')} if RAWS_PATH.exists() else set(),
         }
 
-        with create_progress() as progress:
-            task = progress.add_task(
+        with reporter:
+            reporter.task(
                 f"[cyan]Importing {total_files} files from camera",
-                total=total_files
+                total_files,
             )
 
             for file_path, dest, ftype, should_delete in zip(all_files, file_destinations, file_types, delete_flags):
@@ -220,7 +227,8 @@ class PhotoWorkflow:
                     else:
                         raf_count += 1
                     existing_names[dest].add(new_filename)
-                    progress.advance(task)
+                    reporter.event("file_done", {"filename": new_filename, "dest": str(dest), "type": ftype, "action": "dry_run"})
+                    reporter.advance()
                     continue
 
                 dst_path = dest / new_filename
@@ -236,6 +244,7 @@ class PhotoWorkflow:
                             is_dup = True
                             break
 
+                action = "skipped"
                 if is_dup:
                     if ftype == "video":
                         mov_skip += 1
@@ -248,11 +257,12 @@ class PhotoWorkflow:
                         try:
                             file_path.unlink()
                         except Exception as e:
-                            error(f"Failed to delete duplicate {file_path.name}: {e}")
+                            reporter.log("error", f"Failed to delete duplicate {file_path.name}: {e}")
                             errors += 1
                 else:
                     copy_success, copy_error = self.file_manager.safe_copy(file_path, dst_path)
                     if copy_success:
+                        action = "copied"
                         existing_names[dest].add(new_filename)
                         if ftype == "video":
                             mov_count += 1
@@ -265,13 +275,15 @@ class PhotoWorkflow:
                             try:
                                 file_path.unlink()
                             except Exception as e:
-                                error(f"Failed to delete original {file_path.name}: {e}")
+                                reporter.log("error", f"Failed to delete original {file_path.name}: {e}")
                                 errors += 1
                     else:
-                        error(f"Failed to copy {file_path.name}: {copy_error}")
+                        action = "error"
+                        reporter.log("error", f"Failed to copy {file_path.name}: {copy_error}")
                         errors += 1
 
-                progress.advance(task)
+                reporter.event("file_done", {"filename": new_filename, "dest": str(dest), "type": ftype, "action": action})
+                reporter.advance()
 
         return {
             'videos': mov_count,
@@ -281,19 +293,26 @@ class PhotoWorkflow:
             'errors': errors
         }
 
-    def finalize_staging(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+    def finalize_staging(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, int]:
         """
         Finalize the staging process by moving approved photos to the final folder
         and cleaning up orphaned RAW files.
 
         Args:
             dry_run (bool): If True, only simulate the finalization without moving files
-            progress_callback (callable): Optional callback function for progress updates
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict[str, int]: Statistics about the finalization operation
         """
-        from photo_flow.console_utils import create_progress, info
+        if reporter is None:
+            reporter = RichReporter()
 
         stats = {
             'moved': 0,
@@ -325,10 +344,10 @@ class PhotoWorkflow:
         # it would only add generation loss, and the web gallery already downscales on
         # demand (Astro + sharp). Photomator's .photo-edit sidecar (the re-editable
         # history) travels with its JPG so finalized photos stay non-destructively editable.
-        with create_progress() as progress:
-            task = progress.add_task(
+        with reporter:
+            reporter.task(
                 f"[cyan]Moving {len(staging_files)} photos to Final",
-                total=len(staging_files)
+                len(staging_files),
             )
 
             for staging_file in staging_files:
@@ -342,22 +361,25 @@ class PhotoWorkflow:
                     is_dup, _ = self.file_manager.is_duplicate(staging_file, final_path)
                     if is_dup:
                         stats['skipped'] += 1
-                        progress.advance(task)
+                        reporter.event("file_done", {"filename": staging_file.name, "action": "skipped"})
+                        reporter.advance()
                         continue
 
                 if dry_run:
                     stats['moved'] += 1
                     if has_sidecar:
                         stats['edits_moved'] += 1
+                    reporter.event("file_done", {"filename": staging_file.name, "action": "moved"})
                 else:
                     # ATOMIC per file: Copy (hash-verified) → Delete. Interrupt-safe:
                     # an unfinished file simply stays in Staging for the next run.
                     copy_success, copy_error = self.file_manager.safe_copy(staging_file, final_path)
 
                     if not copy_success:
-                        error(f"Failed to copy {staging_file.name} to Final: {copy_error}")
+                        reporter.log("error", f"Failed to copy {staging_file.name} to Final: {copy_error}")
                         stats['errors'] += 1
-                        progress.advance(task)
+                        reporter.event("file_done", {"filename": staging_file.name, "action": "error"})
+                        reporter.advance()
                         continue
 
                     # Move the .photo-edit sidecar alongside its JPG (hash-verified copy).
@@ -368,10 +390,10 @@ class PhotoWorkflow:
                                 sidecar_src.unlink()
                                 stats['edits_moved'] += 1
                             except Exception as e:
-                                error(f"Failed to delete staging sidecar {sidecar_src.name}: {e}")
+                                reporter.log("error", f"Failed to delete staging sidecar {sidecar_src.name}: {e}")
                                 stats['errors'] += 1
                         else:
-                            error(f"Failed to copy sidecar {sidecar_src.name} to Final: {sc_error}")
+                            reporter.log("error", f"Failed to copy sidecar {sidecar_src.name} to Final: {sc_error}")
                             stats['errors'] += 1
 
                     # Remove the staging JPG only after its own verified copy succeeded.
@@ -379,10 +401,12 @@ class PhotoWorkflow:
                         staging_file.unlink()
                         stats['moved'] += 1
                     except Exception as e:
-                        error(f"Failed to delete staging file {staging_file.name}: {e}")
+                        reporter.log("error", f"Failed to delete staging file {staging_file.name}: {e}")
                         stats['errors'] += 1
 
-                progress.advance(task)
+                    reporter.event("file_done", {"filename": staging_file.name, "action": "moved"})
+
+                reporter.advance()
 
         # Step 2: Delete RAW files from camera for finalized images
         # Note: RAW files are now deleted during import, so this will typically find nothing.
