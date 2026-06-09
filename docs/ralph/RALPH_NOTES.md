@@ -159,3 +159,50 @@ and backup source routing.
 - The `backup availability` endpoint builds Pydantic instances manually; a helper that transforms
   the raw dict would be cleaner if `get_backup_availability` shape changes.
 - Job history for ops is unbounded (same issue as noted in Group 4).
+
+## Group 6: SQLite metadata index
+
+### What was implemented
+Created `photo_flow/index/` package with `db.py` (connection + schema init, WAL mode, two indexes)
+and `indexer.py` (incremental `reindex()` + three EXIF string parsers). Added 44 tests in
+`tests/test_index.py` covering parsers (table-driven with edge/malformed inputs), schema
+round-trips for nullable EXIF columns, and reindex behaviors (first run, no-change skip, mtime
+change, removal → `in_final=0`, published detection, numeric EXIF parsing, empty/missing path
+guards, and auto-open/close of the default DB).
+
+### Deviations from prompt
+- `in_final=0` on removal (rather than hard DELETE) was chosen as stated in the prompt. Rows
+  persist for historical analytics even after a photo leaves Final.
+- `published` is determined by file presence in `GALLERY_PATH/images/` (the actual synced state),
+  not by `rating >= 4`. This reflects real published state: a highly-rated photo not yet synced
+  is correctly `published=0`, and a photo whose rating was later dropped but not yet removed from
+  the gallery stays `published=1` until the next `sync-gallery` run.
+
+### Gotchas & surprises
+- `parse_aperture("f/")` — stripping `f` then `/` produces an empty string which `float()` raises
+  on; handled by the catch-all `(ValueError, AttributeError)` return-None path.
+- `scan_for_images` returns both `*.JPG` and `*.jpg` results (case-insensitive), so the gallery
+  `published` check uses `.upper()` for the suffix comparison to avoid misses on lowercase files.
+- `sqlite3.Row` row factory needed for dict-like `row["col"]` access — set in `get_db()`.
+- mtime floating-point comparison uses a 1ms tolerance (< 0.001s) to absorb filesystem precision
+  differences (HFS+ truncates to seconds on some mounts; APFS stores nanoseconds).
+
+### Security notes
+- The DB lives at `~/.photoflow/index.db` — local user-only, not in the repo.
+- No user-controlled strings are interpolated into SQL; all values go through parameterized queries.
+- `reindex()` never deletes files — it only reads and writes the index.
+
+### Tests added
+`tests/test_index.py` — 44 tests:
+- `TestParseAperture` (9), `TestParseShutter` (12), `TestParseFocal` (10): table-driven parsers.
+- `TestSchema` (3): table creation, nullable EXIF columns, index presence.
+- `TestReindex` (9): first run, no-change skip, mtime trigger, removal marking, published flag,
+  numeric EXIF columns, empty dir, nonexistent path, auto-conn open/close.
+
+### Future improvements
+- `reindex()` could accept a progress callback for the API to stream indexing progress over SSE
+  (Group 7 may want this).
+- The `removed` counter marks rows `in_final=0` but never prunes them. A `vacuum_old_rows(days=90)`
+  helper would cap DB growth for large libraries.
+- `published` is checked via filesystem presence at index time; a post-sync hook that calls
+  `reindex()` incrementally would keep it more current than a periodic poll.
