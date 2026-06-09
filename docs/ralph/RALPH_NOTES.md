@@ -84,3 +84,30 @@ No security-relevant changes. All output routing changes; no file-move logic tou
 - `RichReporter.event("phase", ...)` could show a spinner (using `console.status()`), making the npm build + rsync feel as polished as before. Currently a text log line.
 - The `"transfer"` event shape `{pct, speed, eta, files}` is Group 4's SSE contract — `files` is `"--"` until the first `Transferred: N/M` line appears, which is typically after the first pct line. Group 4 should treat `"--"` as "not yet known".
 - `_process_files` is dead code (never called after the Group 2 refactor of `import_from_camera`) and can be removed in a cleanup pass.
+
+## Group 4: Job manager, QueueReporter, SSE, and status endpoints
+
+### What was implemented
+Created `photo_flow/api/jobs.py` (`Job`, `QueueReporter`, `JobManager`), `routes_status.py` (`GET /status`, `GET /status/pending`), `routes_jobs.py` (`GET /jobs/{id}`, `GET /events/{id}`). Updated `app.py` to wire the routers and instantiate `JobManager` on `app.state` via a lifespan. Added two test files (`test_api_status.py`, `test_jobs.py`) covering: status field shapes, no-camera-scan on cheap endpoint, single-flight 409 enforcement, ordered event production, replay after job completion, failed job status, and full SSE streaming via `TestClient`.
+
+### Deviations from prompt
+- Used a boolean `_running` flag rather than an `asyncio.Lock` for single-flight enforcement. The lock approach has a real race window: `create_task()` schedules the task but the lock isn't acquired until the task runs, so two `start()` calls can both pass `locked()` before either task executes. The flag is set synchronously with no `await` between check and set — race-free in asyncio's single-threaded model.
+- `Job._enqueue` + `subscribe()` pattern instead of `asyncio.Queue` on the job directly. Both methods run in the event loop thread (via `call_soon_threadsafe` and `async def`), so there is no concurrent modification race between pre-loading history and fanning out future events.
+
+### Gotchas & surprises
+- `TestClient` must be used as a context manager (`with TestClient(app) as client:`) for FastAPI lifespan events to fire. Without it, `app.state.job_manager` is never populated and every request raises `AttributeError`. This is a common footgun.
+- `asyncio.to_thread` is Python 3.9+ which matches the project requirement — no compatibility shim needed.
+- `sse-starlette`'s `EventSourceResponse` cancels the generator via `CancelledError` on client disconnect. The `finally: job.unsubscribe(q)` block cleans up correctly even on disconnect.
+
+### Security notes
+- The `JobManager` single-flight guard prevents concurrent destructive ops — essential since `finalize` and `backup` delete files.
+- `EventSourceResponse` is served over the existing localhost-only uvicorn binding (`127.0.0.1:7720`).
+
+### Tests added
+`tests/test_api_status.py` — 4 tests: shape, field types, no-camera-scan guard, pending shape.
+`tests/test_jobs.py` — 10 tests: protocol conformance, ordered events, single-flight RuntimeError, replay after completion, failed job status, HTTP 404/409, GET /jobs after start, SSE stream content, SSE 404.
+
+### Future improvements
+- The staging count cache (`_CACHE_TTL = 5s`) is module-level so it survives across test runs in the same process. A factory or `app.state` pattern would make it per-app for cleaner test isolation.
+- `GET /status/pending` creates a new `FileManager()` per-module (module-level singleton). If `FileManager._hash_cache` grows large, this lives for the process lifetime — acceptable for a single-process personal daemon.
+- Job history is unbounded (`_jobs` dict never pruned). A small LRU (keep last N jobs) would cap memory for a long-running daemon.
