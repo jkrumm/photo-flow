@@ -373,5 +373,42 @@ def serve(host: str, port: int) -> None:
     uvicorn.run(_app, host=host, port=port)
 
 
+@photoflow.group()
+def service():
+    """Manage the always-on control panel LaunchAgent (localhost:7720)."""
+    pass
+
+
+@service.command(name='install')
+@click.option('--no-build', is_flag=True, help='Skip building the SPA (use existing dist/)')
+@click.option('--host', default='127.0.0.1', show_default=True, help='Host to bind (localhost only)')
+@click.option('--port', default=7720, show_default=True, help='Port for the control panel')
+def service_install(no_build, host, port):
+    """Build the SPA, install the LaunchAgent, and start it."""
+    from photo_flow import service as svc
+    svc.install(build=not no_build, host=host, port=port)
+
+
+@service.command(name='uninstall')
+def service_uninstall():
+    """Stop and remove the LaunchAgent."""
+    from photo_flow import service as svc
+    svc.uninstall()
+
+
+@service.command(name='status')
+def service_status():
+    """Show whether the control panel service is installed and running."""
+    from photo_flow import service as svc
+    svc.status()
+
+
+@service.command(name='restart')
+def service_restart():
+    """Reload the service (pick up a new SPA build or code change)."""
+    from photo_flow import service as svc
+    svc.restart()
+
+
 if __name__ == '__main__':
     photoflow()
