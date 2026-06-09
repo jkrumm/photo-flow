@@ -7,7 +7,7 @@
     "dev": "vite --port 7721 --strictPort",
     "build": "tsr generate && vite build",
     "preview": "vite preview --port 7721 --strictPort",
-    "lint": "oxlint src",
+    "lint": "oxlint src && node scripts/check-hex.mjs",
     "gen:api": "openapi-typescript http://127.0.0.1:7720/openapi.json -o src/lib/api-types.ts"
   },
   "dependencies": {
@@ -21,6 +21,14 @@
     "@tanstack/react-query-devtools": "^5.100.10",
     "@tanstack/react-router": "^1.169.2",
     "@tanstack/react-router-devtools": "^1.166.13",
+    "@visx/axis": "^4.0.0-alpha.11",
+    "@visx/curve": "^4.0.0-alpha.11",
+    "@visx/event": "^4.0.0-alpha.11",
+    "@visx/grid": "^4.0.0-alpha.11",
+    "@visx/group": "^4.0.0-alpha.11",
+    "@visx/scale": "^4.0.0-alpha.11",
+    "@visx/shape": "^4.0.0-alpha.11",
+    "@visx/threshold": "^4.0.0-alpha.11",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.0.0",
     "react": "^19.0.0",
@@ -30,6 +38,7 @@
   "devDependencies": {
     "@tanstack/router-cli": "^1.166.43",
     "@tanstack/router-plugin": "^1.167.35",
+    "@types/d3-scale": "^4.0.9",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

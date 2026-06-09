@@ -54,6 +54,10 @@ const DERIVED = [
   decl('goodSoft', 'color-mix(in srgb, var(--vx-goodSolid) 8%, transparent)'),
   decl('bad', 'color-mix(in srgb, var(--vx-badSolid) 18%, transparent)'),
   decl('warn', 'color-mix(in srgb, var(--vx-warnSolid) 8%, transparent)'),
+  decl('goodRef', 'color-mix(in srgb, var(--vx-goodSolid) 30%, transparent)'),
+  decl('badRef', 'color-mix(in srgb, var(--vx-badSolid) 30%, transparent)'),
+  decl('warnRef', 'color-mix(in srgb, var(--vx-warnSolid) 20%, transparent)'),
+  decl('optimalZone', 'color-mix(in srgb, var(--vx-goodSolid) 10%, transparent)'),
 ].join('\n')
 
 export const PALETTE_CSS = `:root {

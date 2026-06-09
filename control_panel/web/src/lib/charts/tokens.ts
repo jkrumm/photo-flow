@@ -19,6 +19,10 @@ export const VX = {
   goodSolid: 'var(--vx-goodSolid)',
   badSolid: 'var(--vx-badSolid)',
   warnSolid: 'var(--vx-warnSolid)',
+  goodRef: 'var(--vx-goodRef)',
+  badRef: 'var(--vx-badRef)',
+  warnRef: 'var(--vx-warnRef)',
+  optimalZone: 'var(--vx-optimalZone)',
 
   line: 'var(--vx-line)',
   grid: 'var(--vx-grid)',

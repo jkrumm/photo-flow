@@ -275,4 +275,33 @@ None — browser-only SPA. Build (`tsr generate && vite build`) is the typecheck
 - Swap hand-crafted `api-types.ts` for a proper `openapi-typescript` generated snapshot once Group 9 workflow is settled (run `npm run gen:api` against a live server and commit the output).
 - Add `@tanstack/react-router-devtools` rendering behind `import.meta.env.DEV` once initial dev iteration is done.
 - The Mantine `violet` color is mapped to `BP.violet` twice (both `grape` and `violet` entries). A future cleanup could use `BP.indigo` for `grape`.
+
+## Group 9: Vendor argo visx charts + Blueprint token system
+
+### What was implemented
+Vendored argo's `@argo/charts` visx package (primitives, hooks, utils, kinds, sparklines) into `src/lib/charts/`, wired the Mantine↔charts bridge (`VxBridge` already present from Group 8), added a hex-guard lint script, and rendered a sample `Bars` chart on the Analytics route to prove theme toggling works via CSS vars.
+
+### Deviations from prompt
+- `VxBridge` and `charts-bridge.tsx` were already set up by Group 8; Group 9 only needed to extend the existing `src/lib/charts/` directory (not create it from scratch).
+- Group 8 used a `PHOTO` series namespace instead of argo's `SERIES` — all vendored primitives/kinds accept `color` props so they work with any token set; no series namespace changes needed in kind implementations.
+- The token system was partially in place; added missing derived vars (`goodRef`, `badRef`, `warnRef`, `optimalZone`) to `tokens.ts` and `theme-vars.ts`.
+- Hex guard scopes to `src/lib/charts/` + `src/routes/` only (not full `src/`) — `theme.ts` is the Mantine palette bridge and is legitimately hex-bearing; scanning it would produce false positives.
+
+### Gotchas & surprises
+- `@visx/shape` v4-alpha exports `Pie` (used by Donut) — confirmed via `require` before writing.
+- oxlint `no-underscore-dangle` fires warnings on `__y` / `__d` internal augmentation fields in ZonedLine and Bars. These are canonical argo idioms (ephemeral type augmentation to carry pre-computed values through the data pipeline). Lint exits 0 (warnings only); leaving as-is to stay in sync with upstream.
+- The hex guard initially matched JSDoc comment lines mentioning `rgba()`. Fixed by skipping lines where `trimmed` starts with `//`, `*`, or `/*`.
+- `@visx/threshold` is installed as a separate package; `Pie` is part of `@visx/shape` (no `@visx/pie` package exists in v4-alpha).
+
+### Security notes
+No security-relevant changes — all chart code is pure client-side rendering with no data fetching in this group.
+
+### Tests added
+None — chart primitives are browser-rendering code. `npm run build` (strict TS + bundle) + `npm run lint` (oxlint + hex guard) are the correctness gates.
+
+### Future improvements
+- Wire the `Bars` chart on Analytics to live SQLite index data once Groups 10–12 expose the analytics endpoints.
+- Add `ZonedLine` for rating-over-time and `Donut` for rating distribution — both kinds are vendored and ready.
+- Consider adding `HoverContext.Provider` at the Analytics page level to enable cross-chart cursor sync once multiple charts are present.
+- The `no-underscore-dangle` warnings could be suppressed via an oxlint allow-list (`__y`, `__d`) if they become noisy.
 - Consider `build.rolldownOptions.output.codeSplitting` once more routes are added to split the Mantine vendor chunk.
