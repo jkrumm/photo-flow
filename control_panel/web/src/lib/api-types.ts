@@ -214,3 +214,10 @@ export type RefreshResponse = {
   skipped: number
   removed: number
 }
+
+export type LibraryHealthResponse = {
+  orphaned_raws: number | null
+  raws_available: boolean
+  final_count: number
+  raws_count: number
+}

@@ -6,13 +6,14 @@ For stages outside the index (Staging, RAWs, Videos), storage sizes come from a
 quick filesystem glob — bounded and fast.
 
 Endpoints:
-  GET /analytics/summary     — headline tiles (totals, avg rating, date range)
-  GET /analytics/over-time   — photos-over-time with rating-band overlay
-  GET /analytics/ratings     — rating histogram + Final-total vs published
-  GET /analytics/settings    — ISO / aperture / focal / shutter distributions
-  GET /analytics/storage     — byte + file counts per pipeline stage
-  GET /analytics/map         — GPS coordinates for map visualisation
-  POST /index/refresh        — trigger incremental reindex of the Final folder
+  GET /analytics/summary        — headline tiles (totals, avg rating, date range)
+  GET /analytics/over-time      — photos-over-time with rating-band overlay
+  GET /analytics/ratings        — rating histogram + Final-total vs published
+  GET /analytics/settings       — ISO / aperture / focal / shutter distributions
+  GET /analytics/storage        — byte + file counts per pipeline stage
+  GET /analytics/map            — GPS coordinates for map visualisation
+  GET /analytics/library-health — orphaned RAWs count + final/raws file counts
+  POST /index/refresh           — trigger incremental reindex of the Final folder
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 from photo_flow.config import FINAL_PATH, RAWS_PATH, STAGING_PATH, SSD_PATH
 from photo_flow.index.db import get_db
 from photo_flow.index.indexer import reindex
+from photo_flow.timestamp_renamer import extract_original_base, is_already_renamed
 
 router = APIRouter()
 
@@ -110,6 +112,13 @@ class RefreshResponse(BaseModel):
     updated: int
     skipped: int
     removed: int
+
+
+class LibraryHealthResponse(BaseModel):
+    orphaned_raws: Optional[int]  # null when RAWS_PATH is not mounted
+    raws_available: bool
+    final_count: int
+    raws_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +347,57 @@ def _query_summary() -> Dict[str, Any]:
         conn.close()
 
 
+def _query_library_health() -> Dict[str, Any]:
+    conn = _open_conn()
+    try:
+        final_count: int = conn.execute(
+            "SELECT COUNT(*) AS count FROM photos WHERE in_final = 1"
+        ).fetchone()["count"]
+        final_rows = conn.execute(
+            "SELECT filename FROM photos WHERE in_final = 1"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Build set of original bases present in Final (e.g. "DSCF0430")
+    final_bases: set[str] = set()
+    for row in final_rows:
+        fname: str = row["filename"]
+        if is_already_renamed(fname):
+            final_bases.add(extract_original_base(fname))
+        else:
+            # Pre-timestamp filename: base is everything up to the extension
+            dot = fname.rfind(".")
+            final_bases.add(fname[:dot] if dot != -1 else fname)
+
+    if not RAWS_PATH.exists():
+        return {
+            "orphaned_raws": None,
+            "raws_available": False,
+            "final_count": final_count,
+            "raws_count": 0,
+        }
+
+    raf_files = list(RAWS_PATH.glob("*.RAF")) + list(RAWS_PATH.glob("*.raf"))
+    raws_count = len(raf_files)
+
+    orphaned = 0
+    for raf in raf_files:
+        if is_already_renamed(raf.name):
+            base = extract_original_base(raf.name)
+        else:
+            base = raf.stem
+        if base not in final_bases:
+            orphaned += 1
+
+    return {
+        "orphaned_raws": orphaned,
+        "raws_available": True,
+        "final_count": final_count,
+        "raws_count": raws_count,
+    }
+
+
 def _run_reindex() -> Dict[str, int]:
     return reindex()
 
@@ -389,6 +449,13 @@ async def analytics_summary() -> SummaryResponse:
     """Headline tiles: total photos, published count, this-month count, avg rating, date range."""
     data = await asyncio.to_thread(_query_summary)
     return SummaryResponse(**data)
+
+
+@router.get("/analytics/library-health", response_model=LibraryHealthResponse)
+async def analytics_library_health() -> LibraryHealthResponse:
+    """Orphaned RAWs count and Final/RAWs file counts for the library health dashboard."""
+    data = await asyncio.to_thread(_query_library_health)
+    return LibraryHealthResponse(**data)
 
 
 @router.post("/index/refresh", response_model=RefreshResponse)

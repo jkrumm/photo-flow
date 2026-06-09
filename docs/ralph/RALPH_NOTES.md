@@ -382,3 +382,34 @@ None — browser-rendering components. `npm run build && npm run lint` are the c
 - The log tail shows only the last 20 entries on screen (though 80 are retained in state). A "show all" expand control would help for long sync/backup runs.
 - Consider per-op customization in `JobProgressPanel` (e.g., rclone section only for backup, per-file ticker only for import/finalize).
 - Code-split the operations route (Mantine modals pull in some weight) once more routes are in place.
+
+## Group 12: Analytics + Library Health UI
+
+### What was implemented
+Full analytics dashboard (`analytics.tsx`) wired to all six Group-7 endpoints via new TanStack Query factories: summary tiles (6 stat cards), photos-over-time stacked Bars with bucket toggle (day/week/month/year), rating histogram (multi-colour Bars using per-datum key routing), publish-rate Donut, storage tiles, four small EXIF-settings Bars (ISO, aperture, focal, shutter) via a shared `SettingsBarChart` component, and a GPS bounding-box scatter (SVG, no new deps). Full Library Health page (`library.tsx`) with index-refresh mutation (POST /index/refresh + query invalidation), orphaned-RAWs card, per-source backup-freshness cards (local vs remote counts + needs_sync from `/backup/availability`), and a storage overview card. Added `GET /analytics/library-health` backend endpoint to `routes_analytics.py` (counts orphaned RAFs vs the DB's Final set via `extract_original_base`). Added `LibraryHealthResponse` type to `api-types.ts` and a shared `src/lib/format.ts` for `formatBytes`.
+
+### Deviations from prompt
+- No tile-map library added for GPS — a SVG bounding-box scatter is used instead with a tooltip note explaining the deferral. This avoids bundle weight (Leaflet ~40 KB) for a personal tool where GPS coverage is sparse.
+- No component-level test files added — no test runner (Vitest/Jest) is configured in the frontend. The TypeScript strict build + oxlint gates cover type correctness. Noted as a future improvement.
+- `SettingsBarChart` is a function component within the route file rather than a new visx `kinds/` entry — it's a thin wrapper around `Bars` with EXIF-specific formatting, too domain-specific to be a reusable chart kind.
+
+### Gotchas & surprises
+- `eqeqeq` oxlint rule fires on `!= null` — must use `!== null` even in null-check idioms.
+- The `alpha()` helper returns `color-mix(in srgb, ...)` which is NOT flagged by the hex-guard script (which only matches `rgb(...)` and `hsl(...)`). Safe to use in route files.
+- `AxisBottomDate` / `fmtAxisDate` works fine with non-date strings (ISO values, focal lengths, etc.) — it falls back to `String(value)` when the date regex doesn't match.
+- Rating histogram: the multi-key `positiveBars` approach (one `positiveBars` entry per rating, `getValue` returns null for non-matching datums) correctly renders one coloured bar per x-bucket because the stacked renderer skips null/zero segments.
+- `Donut` requires `useVxTheme` context (for arc stroke colour) — this is already provided by `VxThemeProvider` in `main.tsx` / `charts-bridge.tsx`.
+
+### Security notes
+- All API calls are same-origin GET/POST to `127.0.0.1:7720` (localhost only).
+- The "Refresh Index" mutation POSTs to `/index/refresh` with no payload — no user data is sent.
+- The `_query_library_health()` backend function does read-only filesystem globbing and DB selects — no mutation of files.
+
+### Tests added
+None — no test runner configured. Backend Python import smoke test validates the new endpoint is importable.
+
+### Future improvements
+- Add Leaflet or MapLibre tile-map for the GPS chart once bundle splitting is in place (code-split the analytics route to limit weight).
+- Add Vitest to the frontend devDeps and write component tests for `formatBytes`, rating histogram data transformation, and the `SettingsBarChart` empty-state path.
+- "Last backup" timestamp: the `/backup/availability` endpoint doesn't track sync timestamps. A future enhancement could write a `.last_sync` file or log to SQLite after each backup run and surface the timestamp in library health.
+- Consider adding a `needs_index` badge to the Analytics page when `total_photos === 0` to prompt the user to run a first index refresh.
