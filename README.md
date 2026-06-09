@@ -4,11 +4,44 @@ A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging w
 
 > **Note**: This is a personal tool designed for local use on a single developer's machine, not production software intended for distribution or multi-user environments.
 
-## TODOs
-- [ ] Validate RAW flow (move, cleanup, backup to HDD)
-- [ ] Add Bottom padding to website
-- [ ] Make sure camera is clean also all Movies, RAWs, JPGs
-- [ ] Setup Immich
+## Control Panel
+
+A local-only web UI lives at `http://localhost:7720` — pipeline status, operation triggers with live progress, and analytics over the photo library.
+
+### Build & run
+
+```bash
+# Build the SPA (one-time, redo after UI changes)
+cd control_panel/web && npm install && npm run build && cd ../..
+
+# Start the server
+photoflow serve
+# → http://localhost:7720
+```
+
+### Install as always-on daemon (launchd)
+
+```bash
+cp control_panel/launchd/com.jkrumm.photoflow.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.jkrumm.photoflow.plist
+# Runs on login, restarts on crash, logs to /tmp/photoflow.{log,err}
+```
+
+To uninstall: `launchctl unload ~/Library/LaunchAgents/com.jkrumm.photoflow.plist && rm ~/Library/LaunchAgents/com.jkrumm.photoflow.plist`
+
+### Optional: HTTPS via Caddy
+
+Add to `~/dotfiles/config/Caddyfile` (port 7721 = Vite dev; 7720 = prod):
+
+```
+photoflow.test {
+  reverse_proxy 127.0.0.1:7720
+}
+```
+
+Then `caddy-reload` and commit in dotfiles.
+
+---
 
 ## Features
 
@@ -52,6 +85,14 @@ photoflow backup
 That's it! No virtual environments to activate, works from any directory. ✨
 
 ## Commands
+
+### `photoflow serve`
+Start the web control panel:
+```bash
+photoflow serve                        # http://127.0.0.1:7720 (default)
+photoflow serve --port 7720 --host 127.0.0.1
+```
+Serves the built SPA + API on the same origin. Requires `npm run build` in `control_panel/web/` first. The PWA manifest lets you install it as a desktop app.
 
 ### `photoflow status`
 Check the current status of your workflow:

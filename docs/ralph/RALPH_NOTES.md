@@ -413,3 +413,51 @@ None — no test runner configured. Backend Python import smoke test validates t
 - Add Vitest to the frontend devDeps and write component tests for `formatBytes`, rating histogram data transformation, and the `SettingsBarChart` empty-state path.
 - "Last backup" timestamp: the `/backup/availability` endpoint doesn't track sync timestamps. A future enhancement could write a `.last_sync` file or log to SQLite after each backup run and surface the timestamp in library health.
 - Consider adding a `needs_index` badge to the Analytics page when `total_photos === 0` to prompt the user to run a first index refresh.
+
+## Group 13: `photoflow serve`, static serving, LaunchAgent, docs
+
+### What was implemented
+Added `photoflow serve` CLI subcommand (Click, `--host`/`--port`, defaults `127.0.0.1:7720`),
+static SPA serving in `app.py` (catch-all `/{full_path:path}` route registered after all API
+routers so API routes take precedence; serves `dist/` files directly, falls back to `index.html`
+for SPA routing), a `control_panel/launchd/com.jkrumm.photoflow.plist` LaunchAgent template
+(`KeepAlive`/`RunAtLoad`/Background), and updated README + CLAUDE.md with control panel
+architecture, `serve` command docs, LaunchAgent install instructions, and a v0.4.0 changelog entry.
+
+### Deviations from prompt
+- No Caddy `photoflow.test` entry was written to the dotfiles Caddyfile — the instructions say this
+  is the user's to commit, so it is documented in the README instead.
+- `python -m photo_flow.api` (`__main__.py`) was left unchanged (hardcoded `127.0.0.1:7720`) —
+  it already worked correctly as a dev entry point and adding argument parsing there would duplicate
+  the Click command logic for no benefit.
+
+### Gotchas & surprises
+- FastAPI route ordering: `app.include_router()` registers routes before `@app.get("/{full_path:path}")`,
+  so Starlette matches API routes first and the catch-all only fires for unknown paths. This is the
+  correct dependency order and no explicit exclusion list is needed.
+- `StaticFiles(html=True)` does NOT provide a true SPA fallback for deep routes (it returns 404 for
+  `/analytics`, not `index.html`). The custom catch-all route pattern is required.
+- `_DIST_PATH` resolved via `Path(__file__).parent.parent.parent` works correctly regardless of the
+  working directory at invocation time, which is important for the LaunchAgent where `WorkingDirectory`
+  points to the repo root but `uvicorn` may import the module from any cwd.
+- The LaunchAgent `ProgramArguments` path (`venv/bin/photoflow`) is absolute to the repo's venv.
+  If installed via pipx the path is `~/.local/bin/photoflow` — documented as a comment in the plist.
+
+### Security notes
+- `--host 127.0.0.1` is the default; passing any other host is the user's explicit choice. The
+  LaunchAgent plist hardcodes `127.0.0.1` so a misconfigured default cannot expose the server.
+- The SPA catch-all returns `index.html` for unknown paths but does NOT read arbitrary filesystem
+  paths — only `dist/` contents are ever served.
+- No sensitive values (keys, IPs) are embedded in the plist or README.
+
+### Tests added
+None beyond the existing 131-test suite (all pass). The `serve` command is a thin uvicorn wrapper
+with no logic to unit-test; the static serving path is covered by the build validation.
+
+### Future improvements
+- Wire the Caddy `photoflow.test` entry automatically via a dotfiles update script.
+- Add a `photoflow serve --open` flag that opens the browser after uvicorn starts (using
+  `webbrowser.open`).
+- Add a `--reload` flag for development mode (`uvicorn ... --reload`).
+- Consider a Makefile target `make serve` that does `npm run build && photoflow serve` for a
+  single-step launch after UI changes.

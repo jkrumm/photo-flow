@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Photo-Flow Control Panel — LaunchAgent
+  Keeps `photoflow serve` running at http://127.0.0.1:7720 under launchd.
+
+  Install:
+    cp control_panel/launchd/com.jkrumm.photoflow.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.jkrumm.photoflow.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.jkrumm.photoflow.plist
+    rm ~/Library/LaunchAgents/com.jkrumm.photoflow.plist
+
+  If installed via pipx, change ProgramArguments to:
+    /Users/johannes.krumm/.local/bin/photoflow serve
+
+  Logs:
+    stdout → /tmp/photoflow.log
+    stderr → /tmp/photoflow.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jkrumm.photoflow</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/johannes.krumm/SourceRoot/photo-flow/venv/bin/photoflow</string>
+    <string>serve</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>7720</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/johannes.krumm/SourceRoot/photo-flow</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/johannes.krumm</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/photoflow.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/photoflow.err</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

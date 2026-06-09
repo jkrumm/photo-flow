@@ -360,5 +360,18 @@ def backup(dry_run):
         error(f"Backups completed with {total_errors} total errors")
 
 
+@photoflow.command()
+@click.option('--host', default='127.0.0.1', show_default=True, help='Host to bind (localhost only)')
+@click.option('--port', default=7720, show_default=True, help='Port for the control panel')
+def serve(host: str, port: int) -> None:
+    """Start the web control panel at http://localhost:7720."""
+    import uvicorn
+    from photo_flow.api.app import app as _app
+
+    info(f"Starting Photo-Flow control panel at [cyan]http://{host}:{port}[/cyan]")
+    info("Open [cyan]http://localhost:7720[/cyan] in your browser (or install as PWA)")
+    uvicorn.run(_app, host=host, port=port)
+
+
 if __name__ == '__main__':
     photoflow()

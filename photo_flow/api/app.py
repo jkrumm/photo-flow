@@ -1,12 +1,20 @@
+import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from photo_flow.api.jobs import JobManager
 from photo_flow.api.routes_analytics import router as analytics_router
 from photo_flow.api.routes_jobs import router as jobs_router
 from photo_flow.api.routes_ops import router as ops_router
 from photo_flow.api.routes_status import router as status_router
+
+logger = logging.getLogger(__name__)
+
+# Resolve dist path relative to this file: photo_flow/api/app.py → repo root → control_panel/web/dist
+_DIST_PATH = Path(__file__).parent.parent.parent / "control_panel" / "web" / "dist"
 
 
 @asynccontextmanager
@@ -30,6 +38,22 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(ops_router)
     app.include_router(analytics_router)
+
+    # Serve the built SPA. This catch-all is registered after all API routes so those
+    # match first. Any path that doesn't match an API route falls through to here:
+    # known static files are served directly; everything else gets index.html (SPA routing).
+    if _DIST_PATH.exists():
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(full_path: str) -> FileResponse:
+            candidate = _DIST_PATH / full_path
+            if candidate.is_file():
+                return FileResponse(str(candidate))
+            return FileResponse(str(_DIST_PATH / "index.html"))
+    else:
+        logger.info(
+            "SPA dist not found at %s — run `npm run build` in control_panel/web/ to enable static serving",
+            _DIST_PATH,
+        )
 
     return app
 
