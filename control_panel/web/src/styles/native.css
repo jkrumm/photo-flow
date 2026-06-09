@@ -1,0 +1,46 @@
+/* Native-feel polish for mobile browsers and the installed (standalone) PWA.
+   Imported after Mantine styles in main.tsx so these rules win on source order.
+   Adapted from argo/apps/dashboard/src/styles/native.css. */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  height: 100%;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100%;
+  overscroll-behavior-y: contain;
+}
+
+#root {
+  min-height: 100%;
+}
+
+.mantine-Button-root,
+.mantine-NavLink-root,
+.mantine-Burger-root {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+@media (max-width: 48em) {
+  .mantine-Input-input {
+    font-size: 16px;
+  }
+}
+
+@media (display-mode: standalone) {
+  .mantine-AppShell-navbar {
+    padding-left: max(var(--mantine-spacing-md), env(safe-area-inset-left));
+  }
+
+  .mantine-AppShell-main {
+    padding-bottom: max(var(--mantine-spacing-md), env(safe-area-inset-bottom));
+    padding-right: max(var(--mantine-spacing-md), env(safe-area-inset-right));
+  }
+}

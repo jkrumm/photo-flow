@@ -1,0 +1,30 @@
+.bar {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  background: var(--mantine-color-body);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.tab {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--mantine-color-dimmed);
+}
+
+.tab[data-active] {
+  color: var(--mantine-color-text);
+  background-color: color-mix(in srgb, var(--vx-neutral) 10%, transparent);
+}
+
+.label {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 500;
+}

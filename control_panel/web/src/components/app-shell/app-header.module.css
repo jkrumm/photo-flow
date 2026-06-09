@@ -1,0 +1,62 @@
+/* Adapted from argo/apps/dashboard/src/components/app-shell/app-header.module.css */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-sm);
+  width: 100%;
+  height: 100%;
+}
+
+.lead {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-sm);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.pageActions {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--mantine-spacing-xs);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.pageActions :global(.mantine-Group-root) {
+  flex-wrap: nowrap;
+}
+
+.global {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+  flex-shrink: 0;
+}
+
+@media (max-width: 47.99em) {
+  .bar {
+    flex-wrap: wrap;
+    align-content: center;
+  }
+
+  .lead {
+    order: 1;
+    flex: 1 1 auto;
+  }
+
+  .global {
+    order: 2;
+  }
+
+  .pageActions {
+    order: 3;
+    flex-basis: 100%;
+    height: 52px;
+    justify-content: flex-start;
+  }
+}

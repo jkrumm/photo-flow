@@ -243,3 +243,36 @@ Created `photo_flow/api/routes_analytics.py` with six `GET /analytics/*` endpoin
 - `/index/refresh` could stream progress via SSE if `reindex()` gained a progress callback.
 - The storage endpoint's Staging/RAWs/Videos glob is case-sensitive (`*.JPG`, `*.RAF`, `*.MOV`); a case-insensitive glob would be more robust.
 - Analytics results are not cached; for a large library (10k+ photos) the SQLite aggregations are still fast (< 50ms with WAL), but adding an in-memory TTL cache would help if hot-polling is ever added.
+
+## Group 8: SPA scaffold — Vite + React 19 + Mantine + TanStack, strict tooling, typed API client
+
+### What was implemented
+Created `control_panel/web/` — a full Vite 8 + React 19 SPA with strict TypeScript (`strict`, `noUncheckedIndexedAccess`, `noUnusedLocals/Parameters`, `exactOptionalPropertyTypes`), Mantine 9 (Blueprint-reskinned theme), TanStack Router v1 (file-based, code-split), TanStack Query v5 (3s status polling), Zustand (persisted sidebar state), framer-motion dep (unused until Group 10), vite-plugin-pwa, and oxlint. Includes a vendored token system (`src/lib/charts/`) adapted from argo's `@argo/charts` with photo-flow pipeline series colors. App shell: collapsible sidebar, breadcrumb header, mobile bottom-nav, page-header portal pattern. Routes: Pipeline, Operations, Analytics, Library (placeholder pages). Status indicator polls `GET /status` every 3s and shows camera/SSD dots + staging count.
+
+### Deviations from prompt
+- No `openapi-fetch` runtime dep — used a thin hand-rolled typed `fetch` wrapper (`src/lib/api.ts`) instead. The `gen:api` script wires `openapi-typescript` for type generation; a committed hand-crafted `api-types.ts` snapshot avoids a live server at build time. The build doesn't need openapi-fetch's runtime coupling, and the wrapper is simpler for this API surface.
+- Charts vendored as `src/lib/charts/` (alias `@pf/charts`) rather than `@argo/charts` workspace dep — photo-flow is a standalone repo, and the palette is photo-flow specific. Group 9 will add visx primitives to this package.
+- No visx packages installed in Group 8 — charts token system (palette/theme/tokens/CSS vars) works standalone; visx chart kinds come in Group 9.
+- `@mantine/dates` and `@mantine/schedule` not included — not needed for the shell.
+- `@tanstack/react-router-devtools` dep present (for dev) but not rendered in main.tsx to keep the strict build clean; add back if needed.
+
+### Gotchas & surprises
+- TanStack Router Vite plugin generates `src/routeTree.gen.ts` at build start, so `tsr generate` must run before `vite build` (or the Vite plugin handles it). Added `"build": "tsr generate && vite build"` as the combined gate.
+- `exactOptionalPropertyTypes` in tsconfig is unusually strict — it prevents `prop?: T` from accepting `prop: undefined` explicitly. Watch for this when passing props or query results to optional fields.
+- oxlint `img-redundant-alt` fires on any `alt` containing the word "photo". Fixed by using `alt=""` with `aria-hidden="true"` for the decorative logo.
+- Vite 8 with rolldown backend warns on chunks > 500 kB (the Mantine + framer-motion bundle). Not a problem for a local PWA but worth noting.
+- `babel-plugin-react-compiler` requires the `vite-plugin-babel` wrapper, not native `@vitejs/plugin-react`'s experimental compiler support — stay consistent with argo's pattern.
+
+### Security notes
+- Dev server binds on `127.0.0.1:7721` (Vite `strictPort`). The Vite proxy forwards to `127.0.0.1:7720` (uvicorn) — never leaves localhost.
+- The SPA is a static build served by FastAPI in production — no additional server surface.
+- No auth gate needed: both uvicorn and Vite bind localhost only.
+
+### Tests added
+None — browser-only SPA. Build (`tsr generate && vite build`) is the typecheck + bundle gate.
+
+### Future improvements
+- Swap hand-crafted `api-types.ts` for a proper `openapi-typescript` generated snapshot once Group 9 workflow is settled (run `npm run gen:api` against a live server and commit the output).
+- Add `@tanstack/react-router-devtools` rendering behind `import.meta.env.DEV` once initial dev iteration is done.
+- The Mantine `violet` color is mapped to `BP.violet` twice (both `grape` and `violet` entries). A future cleanup could use `BP.indigo` for `grape`.
+- Consider `build.rolldownOptions.output.codeSplitting` once more routes are added to split the Mantine vendor chunk.
