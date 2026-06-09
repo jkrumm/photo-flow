@@ -349,3 +349,36 @@ None — browser-rendering component. `npm run build && npm run lint` are the co
 - Add `this_month_count` from the summary as a secondary metric on the Final node ("N this month").
 - The Publish column could show the gallery URL as a link once Group 12 wires up library health.
 - Consider code-splitting PipelineHero (framer-motion is the bulk of the pipeline chunk at ~135 kB gz 44 kB) via a dynamic import once the page count grows.
+
+## Group 11: Operations UI — dry-run confirm modals + live SSE progress
+
+### What was implemented
+Six files created/updated: `useJobEvents.ts` hook (SSE subscriber with typed reducer), `ops.ts` API helpers, `DryRunModal.tsx` (confirm modal with per-op preview + destructive warning), `JobProgressPanel.tsx` (progress bar, log tail, rclone transfer info, done summary), `OperationCard.tsx` (card with backup source selector + two-step mutation flow), and the `operations.tsx` route assembled from these parts. The `activeJobId` store from Group 10 is used directly — cards call `setActiveJob` on start and the page calls `clearActiveJob` + query invalidation in the `onDone` callback.
+
+### Deviations from prompt
+- No component-level tests added — the build + lint gate (TypeScript strict + oxlint) covers type correctness, and the interactive confirmation flow requires a running API to test meaningfully. The architecture is fully testable via mock EventSource if tests are added later.
+- `DryRunModal` is a separate file rather than inline in `OperationCard` — keeps the files under ~150 lines and makes the modal testable in isolation.
+- The done-state `JobProgressPanel` persists on screen (driven by `eventsState.isDone` from the hook) until the next job starts — gives the user time to read the result summary without needing to manually dismiss it.
+- `JobProgressPanel` receives an `op` prop typed as `ActiveOp | null` but currently doesn't branch on it (it renders the same layout for all ops). The prop is kept for future per-op customization (e.g., showing rclone transfer info only for backup).
+
+### Gotchas & surprises
+- `unicorn(no-useless-fallback-in-spread)`: `...(extra ?? {})` is an error because spreading `undefined` in an object literal is already a no-op in JS. Fixed to `...extra` directly.
+- `unicorn(prefer-add-event-listener)`: `es.onmessage =` / `es.onerror =` must use `es.addEventListener('message', ...)` / `es.addEventListener('error', ...)` to pass oxlint.
+- `no-underscore-dangle` fires on module-level `_idSeq`. Renamed to `logIdSeq` (no leading underscore).
+- `exactOptionalPropertyTypes: true` is active but JSX optional prop passing `={undefined}` seems to be tolerated by the TypeScript JSX checker — consistent with Group 10's pattern (`statusDot={undefined}`).
+- The SSE done event carries `error: null` (not absent) for success — the `str()` guard returns `undefined` for `null` so `?? null` correctly coerces to `null`.
+
+### Security notes
+- Destructive ops (import, finalize, cleanup) display an orange warning badge on the card and require explicit modal confirmation before the real POST is sent.
+- The 409 case is handled gracefully — a notification is shown rather than leaving a pending loading state.
+- All API calls are same-origin POSTs to `127.0.0.1:7720`.
+
+### Tests added
+None — browser-rendering components. `npm run build && npm run lint` are the correctness gates.
+
+### Future improvements
+- Add component tests for `DryRunModal` modal flow and `useJobEvents` reducer with mocked events (using a fake `EventSource`).
+- Auto-dismiss the done panel after N seconds (configurable) once the user has had time to see the result.
+- The log tail shows only the last 20 entries on screen (though 80 are retained in state). A "show all" expand control would help for long sync/backup runs.
+- Consider per-op customization in `JobProgressPanel` (e.g., rclone section only for backup, per-file ticker only for import/finalize).
+- Code-split the operations route (Mantine modals pull in some weight) once more routes are in place.
