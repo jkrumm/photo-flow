@@ -6,7 +6,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="photo-flow",
-    version="0.1.0",
+    version="0.4.0",
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
@@ -15,8 +15,17 @@ setup(
         "piexif>=1.1.3",
         "defusedxml>=0.7.1",
         "rich>=13.7.0",
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0",
+        "fastapi>=0.115",
+        "uvicorn[standard]>=0.32",
+        "sse-starlette>=2.1",
     ],
+    extras_require={
+        "dev": [
+            "pytest>=8",
+            "httpx>=0.27",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "photoflow=photo_flow.cli:photoflow",
