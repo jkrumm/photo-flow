@@ -5,8 +5,10 @@ This module provides the main workflow logic for the application.
 """
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import subprocess
 from typing import Dict, List, Optional
@@ -26,6 +28,41 @@ from photo_flow.immich_client import trigger_immich_scan
 from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, is_already_renamed
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# rclone line-parser — module-level so tests can import it directly
+# ---------------------------------------------------------------------------
+
+_RCLONE_PCT_RE = re.compile(
+    r'Transferred:.*?,\s+(\d+)%,\s+([\d.]+\s*\S+/s),\s+ETA\s+(\S+)'
+)
+_RCLONE_FILES_RE = re.compile(
+    r'Transferred:\s+(\d+)\s*/\s*(\d+),\s+\d+%'
+)
+
+
+def _parse_rclone_line(line: str) -> dict:
+    """
+    Parse a single rclone stats line into progress fields.
+
+    Returned keys (all optional):
+      pct (int), speed (str), eta (str)  — from the speed/ETA line
+      files_done (int), files_total (int) — from the file-count line
+    Empty dict when the line matches neither pattern.
+    """
+    result: dict = {}
+    m = _RCLONE_PCT_RE.search(line)
+    if m:
+        pct, speed, eta = m.groups()
+        result["pct"] = int(pct)
+        result["speed"] = speed
+        result["eta"] = eta
+    fm = _RCLONE_FILES_RE.search(line)
+    if fm:
+        done, total = fm.groups()
+        result["files_done"] = int(done)
+        result["files_total"] = int(total)
+    return result
 
 
 @dataclass
@@ -141,7 +178,7 @@ class PhotoWorkflow:
 
         # Check camera connection
         if not CAMERA_PATH.exists():
-            warning(f"Camera not connected at {CAMERA_PATH} - nothing to import")
+            reporter.log("warning", f"Camera not connected at {CAMERA_PATH} - nothing to import")
             return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': 0, 'errors': 0}
 
         # Scan camera for files
@@ -157,19 +194,19 @@ class PhotoWorkflow:
         # Check SSD connection for video import
         ssd_connected = SSD_PATH.exists()
         if mov_files and not ssd_connected:
-            warning(f"SSD not connected at {SSD_PATH} - skipping {len(mov_files)} video files")
+            reporter.log("warning", f"SSD not connected at {SSD_PATH} - skipping {len(mov_files)} video files")
             mov_files = []
 
         # Check SSD connection for RAW import (RAWs stored on external drive)
         if raf_files and not ssd_connected:
-            warning(f"SSD not connected - skipping {len(raf_files)} RAW files")
+            reporter.log("warning", f"SSD not connected - skipping {len(raf_files)} RAW files")
             raf_files = []
 
         # Process each file type with Rich Progress
         total_files = len(mov_files) + len(jpg_files) + len(raf_files)
 
         if total_files == 0:
-            info("No new files to import")
+            reporter.log("info", "No new files to import")
             return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': 0, 'errors': 0}
 
         all_files = []
@@ -325,13 +362,13 @@ class PhotoWorkflow:
         }
 
         if not STAGING_PATH.exists():
-            info("Staging folder not found. Nothing to finalize.")
+            reporter.log("info", "Staging folder not found. Nothing to finalize.")
             return stats
 
         staging_files = scan_for_images(STAGING_PATH, '.JPG')
 
         if len(staging_files) == 0:
-            info("No photos in staging to finalize")
+            reporter.log("info", "No photos in staging to finalize")
             return stats
 
         # Create final directory if it doesn't exist
@@ -421,14 +458,14 @@ class PhotoWorkflow:
             finalized_raws = [raw for raw in camera_raws if extract_original_base(raw.name) in final_jpg_bases]
 
             if finalized_raws:
-                info(f"Deleting {len(finalized_raws)} RAW files from camera")
+                reporter.log("info", f"Deleting {len(finalized_raws)} RAW files from camera")
                 for raw_file in finalized_raws:
                     if not dry_run:
                         try:
                             raw_file.unlink()
                             stats['deleted_camera_raws'] += 1
                         except Exception as e:
-                            error(f"Failed to delete camera RAW {raw_file.name}: {e}")
+                            reporter.log("error", f"Failed to delete camera RAW {raw_file.name}: {e}")
                             stats['errors'] += 1
                     else:
                         stats['deleted_camera_raws'] += 1
@@ -444,32 +481,39 @@ class PhotoWorkflow:
             stats['orphaned_raws'] = len(orphaned_raws)
 
             if orphaned_raws:
-                info(f"Found {len(orphaned_raws)} orphaned local RAW files")
+                reporter.log("info", f"Found {len(orphaned_raws)} orphaned local RAW files")
                 if not dry_run:
                     for raw_file in orphaned_raws:
                         try:
                             raw_file.unlink()
                             stats['deleted_raws'] += 1
                         except Exception as e:
-                            error(f"Failed to delete orphaned RAW {raw_file.name}: {e}")
+                            reporter.log("error", f"Failed to delete orphaned RAW {raw_file.name}: {e}")
                             stats['errors'] += 1
                 else:
                     stats['deleted_raws'] = len(orphaned_raws)
 
         return stats
 
-    def cleanup_unused_raws(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+    def cleanup_unused_raws(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, int]:
         """
         Clean up unused RAW files that don't have corresponding JPGs in the final folder.
 
         Args:
-            dry_run (bool): If True, only simulate the cleanup without deleting files
-            progress_callback (callable): Optional callback function for progress updates (DEPRECATED - not used)
+            dry_run: If True, only simulate the cleanup without deleting files
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict[str, int]: Statistics about the cleanup operation
         """
-        from photo_flow.console_utils import info, create_progress
+        if reporter is None:
+            reporter = RichReporter()
 
         stats = {
             'orphaned': 0,
@@ -479,18 +523,18 @@ class PhotoWorkflow:
 
         # Check SSD connection (RAWs stored on external drive)
         if not SSD_PATH.exists():
-            warning("External SSD not connected - RAWs folder unavailable")
+            reporter.log("warning", "External SSD not connected - RAWs folder unavailable")
             return stats
 
         # Check if RAWs and Final folders exist
         if not RAWS_PATH.exists():
-            warning(f"RAWs folder not found at {RAWS_PATH} - nothing to clean up")
+            reporter.log("warning", f"RAWs folder not found at {RAWS_PATH} - nothing to clean up")
             return stats
         if not FINAL_PATH.exists():
-            warning(f"Final folder not found at {FINAL_PATH} - cannot determine orphaned RAWs")
+            reporter.log("warning", f"Final folder not found at {FINAL_PATH} - cannot determine orphaned RAWs")
             return stats
 
-        info("Scanning for orphaned RAW files...")
+        reporter.log("info", "Scanning for orphaned RAW files...")
 
         # Get all JPGs in the final folder
         final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
@@ -506,28 +550,23 @@ class PhotoWorkflow:
         orphaned_raws = [raw_file for raw_file in raw_files
                          if extract_original_base(raw_file.name) not in final_jpg_bases]
 
-        # Count orphaned RAWs
         stats['orphaned'] = len(orphaned_raws)
+        reporter.log("info", f"Found {len(orphaned_raws)} orphaned RAW files")
 
-        info(f"Found {len(orphaned_raws)} orphaned RAW files")
-
-        # If not dry run, delete the orphaned RAWs
         if not dry_run and orphaned_raws:
-            with create_progress() as progress:
-                task = progress.add_task(
+            with reporter:
+                reporter.task(
                     f"[cyan]Deleting {len(orphaned_raws)} orphaned RAW files",
-                    total=len(orphaned_raws)
+                    len(orphaned_raws)
                 )
-
                 for raw_file in orphaned_raws:
                     try:
                         raw_file.unlink()
                         stats['deleted'] += 1
                     except Exception as e:
-                        error(f"Failed to delete {raw_file.name}: {e}")
+                        reporter.log("error", f"Failed to delete {raw_file.name}: {e}")
                         stats['errors'] += 1
-
-                    progress.advance(task)
+                    reporter.advance()
 
         return stats
 
@@ -560,7 +599,12 @@ class PhotoWorkflow:
 
         return report
 
-    def sync_gallery(self, dry_run: bool = False, progress_callback=None) -> Dict[str, int]:
+    def sync_gallery(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, int]:
         """
         Sync high-rated images to the gallery and generate metadata JSON.
 
@@ -575,12 +619,16 @@ class PhotoWorkflow:
         8. Builds gallery and syncs to remote server (preserving images)
 
         Args:
-            dry_run (bool): If True, only simulate the sync without copying files
-            progress_callback (callable): Optional callback function for progress updates
+            dry_run: If True, only simulate the sync without copying files
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict[str, int]: Statistics about the sync operation
         """
+        if reporter is None:
+            reporter = RichReporter()
+
         stats = {
             'scanned': 0,
             'synced': 0,
@@ -592,76 +640,53 @@ class PhotoWorkflow:
             'total_in_gallery': 0
         }
 
-        # Check if FINAL_PATH exists
         if not FINAL_PATH.exists():
-            if progress_callback:
-                progress_callback("Final folder does not exist. Nothing to sync.")
+            reporter.log("info", "Final folder does not exist. Nothing to sync.")
             return stats
 
-        # Create gallery images directory if it doesn't exist
         gallery_images_path = GALLERY_PATH / "images"
         if not dry_run:
             gallery_images_path.mkdir(parents=True, exist_ok=True)
 
-        # Get JPG files with case-insensitive extension matching
         final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
         stats['scanned'] = len(final_jpgs)
 
-        # Extract metadata and filter high-rated images
         high_rated_images = []
         all_metadata = []
 
-        # Use Rich Progress for metadata extraction
-        from photo_flow.console_utils import create_progress
-
-        with create_progress() as progress:
-            task = progress.add_task(
+        with reporter:
+            reporter.task(
                 f"[cyan]Extracting metadata from {len(final_jpgs)} images",
-                total=len(final_jpgs)
+                len(final_jpgs)
             )
-
             for jpg_path in final_jpgs:
-                # Extract metadata
                 metadata = MetadataExtractor.extract_metadata(jpg_path)
-
-                # Add metadata to the list
                 all_metadata.append(metadata)
-
-                # Check if image has rating 4+
-                rating = metadata.get('rating', 0)
-
-                if rating >= 4:
+                if metadata.get('rating', 0) >= 4:
                     high_rated_images.append((jpg_path, metadata))
+                reporter.advance()
 
-                progress.advance(task)
+        reporter.log("info", f"Found {len(high_rated_images)} images with rating 4+")
 
-        info(f"Found {len(high_rated_images)} images with rating 4+")
-
-        # Get existing gallery images
         existing_gallery_images = scan_for_images(gallery_images_path, '.JPG') if gallery_images_path.exists() else []
         existing_gallery_image_names = {img.name for img in existing_gallery_images}
 
         logger.debug(f"Existing gallery images: {len(existing_gallery_images)}")
         logger.debug(f"Existing gallery image names: {existing_gallery_image_names}")
 
-        # Determine which images to copy to gallery
         high_rated_image_names = {img[0].name for img in high_rated_images}
 
         logger.debug(f"High-rated images: {len(high_rated_images)}")
         logger.debug(f"High-rated image names: {high_rated_image_names}")
 
-        # Images to remove (in gallery but no longer high-rated)
         images_to_remove = [img for img in existing_gallery_images if img.name not in high_rated_image_names]
-
-        # Images to copy (high-rated but not in gallery)
         images_to_copy = [img[0] for img in high_rated_images if img[0].name not in existing_gallery_image_names]
 
         logger.debug(f"Images to remove: {len(images_to_remove)}")
         logger.debug(f"Images to copy: {len(images_to_copy)}")
 
-        # Remove images that no longer qualify
         if not dry_run and images_to_remove:
-            info(f"Removing {len(images_to_remove)} images no longer rated 4+")
+            reporter.log("info", f"Removing {len(images_to_remove)} images no longer rated 4+")
             for img_path in images_to_remove:
                 try:
                     img_path.unlink()
@@ -669,45 +694,35 @@ class PhotoWorkflow:
                 except Exception as e:
                     error_msg = f"Error removing {img_path}: {e}"
                     logger.error(error_msg)
-                    from photo_flow.console_utils import error as print_error
-                    print_error(error_msg)
+                    reporter.log("error", error_msg)
                     stats['errors'] += 1
 
-        # Copy/update high-rated images to gallery
         total_to_process = len(images_to_copy)
-
         if total_to_process > 0:
-            with create_progress() as progress:
-                task = progress.add_task(
+            with reporter:
+                reporter.task(
                     f"[cyan]Copying {total_to_process} new images to gallery",
-                    total=total_to_process
+                    total_to_process
                 )
-
                 for img_path in images_to_copy:
                     if not dry_run:
                         dst_path = gallery_images_path / img_path.name
-                        success, error_msg = FileManager.safe_copy(img_path, dst_path)
-                        if success:
+                        copy_ok, copy_err = FileManager.safe_copy(img_path, dst_path)
+                        if copy_ok:
                             stats['synced'] += 1
                         else:
-                            logger.error(f"Error copying {img_path.name}: {error_msg}")
+                            logger.error(f"Error copying {img_path.name}: {copy_err}")
                             stats['errors'] += 1
                     else:
                         stats['synced'] += 1
+                    reporter.advance()
 
-                    progress.advance(task)
-
-        # Check existing high-rated images for changes
         images_to_update = [(img[0], img[1]) for img in high_rated_images if
                             img[0].name in existing_gallery_image_names]
 
         unchanged_count = 0
-
-        # Check and update existing images silently (no verbose output)
-        for src_path, metadata in images_to_update:
+        for src_path, _ in images_to_update:
             dst_path = gallery_images_path / src_path.name
-
-            # Skip if files are identical
             is_dup, err = FileManager.is_duplicate(src_path, dst_path)
             if err:
                 logger.error(f"Error checking {src_path.name}: {err}")
@@ -716,14 +731,13 @@ class PhotoWorkflow:
                 unchanged_count += 1
                 continue
 
-            # Copy the file if it has changed
             if not dry_run:
                 try:
-                    success, error = FileManager.safe_copy(src_path, dst_path)
-                    if success:
+                    copy_ok, copy_err = FileManager.safe_copy(src_path, dst_path)
+                    if copy_ok:
                         stats['synced'] += 1
                     else:
-                        logger.error(f"Error updating {src_path.name}: {error}")
+                        logger.error(f"Error updating {src_path.name}: {copy_err}")
                         stats['errors'] += 1
                 except Exception as e:
                     logger.error(f"Error updating {src_path.name}: {e}")
@@ -733,109 +747,100 @@ class PhotoWorkflow:
 
         stats['unchanged'] = unchanged_count
 
-        # Calculate total images in gallery after sync
         if not dry_run:
             stats['total_in_gallery'] = len(scan_for_images(gallery_images_path, '.JPG'))
         else:
-            # In dry run mode, estimate the total
             stats['total_in_gallery'] = len(existing_gallery_images) - len(images_to_remove) + len(images_to_copy)
 
-        # Generate metadata JSON for all high-rated images
-        high_rated_metadata = [metadata for metadata in all_metadata if metadata.get('rating', 0) >= 4]
-
+        high_rated_metadata = [m for m in all_metadata if m.get('rating', 0) >= 4]
         if not dry_run:
             json_path = GALLERY_PATH / "metadata.json"
             stats['json_updated'] = MetadataExtractor.generate_metadata_json(high_rated_metadata, json_path)
 
-        # Build the gallery and sync to remote server
         if not dry_run:
             photo_gallery_path = GALLERY_PATH.parent
-
-            # Use status spinner for build
-            from photo_flow.console_utils import show_status
-
             try:
-                with show_status("Building gallery with npm", spinner="dots"):
-                    # Read the required Node version from .nvmrc
-                    nvmrc_path = photo_gallery_path / ".nvmrc"
-                    if nvmrc_path.exists():
-                        with open(nvmrc_path, 'r') as f:
-                            node_version = f.read().strip()
+                reporter.log("info", "Building gallery with npm...")
+                reporter.event("phase", {"name": "build", "status": "starting"})
 
-                        node_version_clean = node_version.lstrip('v')
-                        node_version_path = os.path.expanduser(f"~/.nvm/versions/node/v{node_version_clean}/bin")
+                nvmrc_path = photo_gallery_path / ".nvmrc"
+                if nvmrc_path.exists():
+                    with open(nvmrc_path, 'r') as f:
+                        node_version = f.read().strip()
+                    node_version_clean = node_version.lstrip('v')
+                    node_version_path = os.path.expanduser(f"~/.nvm/versions/node/v{node_version_clean}/bin")
+                    env = os.environ.copy()
+                    env["PATH"] = f"{node_version_path}:{env['PATH']}"
+                else:
+                    env = None
 
-                        env = os.environ.copy()
-                        env["PATH"] = f"{node_version_path}:{env['PATH']}"
-                    else:
-                        env = None
+                subprocess.run(
+                    ["npm", "run", "build"],
+                    cwd=photo_gallery_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env
+                )
+                reporter.event("phase", {"name": "build", "status": "done"})
 
-                    # Run npm build
-                    build_process = subprocess.run(
-                        ["npm", "run", "build"],
-                        cwd=photo_gallery_path,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        env=env
-                    )
-
-                # Use status spinner for rsync — Tailscale already encrypts the
-                # link, drop -z and use the fast cipher we use for homelab backup.
-                with show_status("Syncing to remote server", spinner="dots"):
-                    rsync_process = subprocess.run(
-                        [
-                            "rsync",
-                            "-a",
-                            "--delete",
-                            "-e", f"ssh -T -c {RCLONE_SSH_CIPHER} -o Compression=no -o ConnectTimeout=5",
-                            f"{photo_gallery_path}/dist/",
-                            f"{GALLERY_REMOTE_USER}@{GALLERY_REMOTE_HOST}:{GALLERY_REMOTE_PATH}/"
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
+                reporter.log("info", "Syncing to remote server...")
+                reporter.event("phase", {"name": "sync", "status": "starting"})
+                # Tailscale already encrypts the link — drop -z, use the fast cipher.
+                subprocess.run(
+                    [
+                        "rsync",
+                        "-a",
+                        "--delete",
+                        "-e", f"ssh -T -c {RCLONE_SSH_CIPHER} -o Compression=no -o ConnectTimeout=5",
+                        f"{photo_gallery_path}/dist/",
+                        f"{GALLERY_REMOTE_USER}@{GALLERY_REMOTE_HOST}:{GALLERY_REMOTE_PATH}/"
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                reporter.event("phase", {"name": "sync", "status": "done"})
 
                 stats['build_successful'] = True
                 stats['sync_successful'] = True
 
             except subprocess.CalledProcessError as e:
-                from photo_flow.console_utils import error as print_error
-                print_error(f"Build/sync failed: {e.stderr if e.stderr else str(e)}")
-
+                reporter.log("error", f"Build/sync failed: {e.stderr if e.stderr else str(e)}")
+                reporter.event("phase", {"name": "build_or_sync", "status": "failed"})
                 logger.error(f"Error during build or sync: {e}")
                 logger.error(f"Command output: {e.stdout}")
                 logger.error(f"Command error: {e.stderr}")
-
                 stats['errors'] += 1
                 stats['build_successful'] = False
                 stats['sync_successful'] = False
         else:
-            # Dry run - don't actually build/sync
-            info("[dim]Dry run: Skipping npm build and remote sync[/dim]")
+            reporter.log("info", "[dim]Dry run: Skipping npm build and remote sync[/dim]")
             stats['sync_successful'] = False
 
         return stats
 
-    def backup_final_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
+    def backup_final_to_homelab(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, any]:
         """
         Backup the Final folder to the homelab server via rclone with parallel transfers.
 
-        Uses rsync for safe, interruptible syncing with trash-based deletion
-        (deleted/replaced files are moved to a timestamped trash folder instead
-        of being permanently deleted).
-
-        Connects via Tailscale (encrypted mesh network).
+        Uses rclone sync over SFTP with trash-based deletion. Connects via Tailscale.
 
         Args:
-            dry_run (bool): If True, only simulate the backup without syncing
-            progress_callback (callable): Deprecated, not used
+            dry_run: If True, only simulate the backup without syncing
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict with keys: 'source', 'scanned', 'sync_successful', 'connection_method', 'trash_path', 'errors'
         """
-        from photo_flow.console_utils import info, warning
+        if reporter is None:
+            reporter = RichReporter()
 
         stats = self._run_backup_rclone(
             source_path=FINAL_PATH,
@@ -844,18 +849,18 @@ class PhotoWorkflow:
             dry_run=dry_run,
             min_files=100,
             file_pattern='*.JPG',
-            trash_base_path=HOMELAB_SSD_TRASH_PATH
+            trash_base_path=HOMELAB_SSD_TRASH_PATH,
+            reporter=reporter,
         )
 
-        # Trigger Immich library scan after successful backup
         if stats['sync_successful'] and not dry_run:
-            info("Triggering Immich library scan...")
+            reporter.log("info", "Triggering Immich library scan...")
             immich_success, immich_msg = trigger_immich_scan()
             stats['immich_scan_triggered'] = immich_success
             if immich_success:
-                info(f"[green]✓[/green] Immich scan triggered")
+                reporter.log("info", "[green]✓[/green] Immich scan triggered")
             else:
-                warning(f"Immich scan failed: {immich_msg}")
+                reporter.log("warning", f"Immich scan failed: {immich_msg}")
 
         return stats
 
@@ -953,7 +958,8 @@ class PhotoWorkflow:
         dry_run: bool = False,
         min_files: int = 0,
         file_pattern: str = '*',
-        trash_base_path: Path = None
+        trash_base_path: Path = None,
+        reporter: Optional[ProgressReporter] = None,
     ) -> Dict[str, any]:
         """
         Internal helper to run rclone backup with parallel transfers, trash-based deletion,
@@ -970,14 +976,15 @@ class PhotoWorkflow:
             dry_run: If True, simulate only
             min_files: Minimum files required (safety check)
             file_pattern: Glob pattern to count files
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
 
         Returns:
             Dict with 'scanned', 'sync_successful', 'connection_method', 'trash_path', 'errors'
         """
-        import re
-        from datetime import datetime
-        from photo_flow.console_utils import info, error as print_error, warning
         from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+
+        if reporter is None:
+            reporter = RichReporter()
 
         stats = {
             'source': source_name,
@@ -988,34 +995,30 @@ class PhotoWorkflow:
             'errors': 0,
         }
 
-        # Pre-checks
         if not source_path.exists():
-            print_error(f"Source folder does not exist: {source_path}")
+            reporter.log("error", f"Source folder does not exist: {source_path}")
             return stats
 
         if shutil.which("rclone") is None:
-            print_error("rclone not found on PATH. Install with: brew install rclone")
+            reporter.log("error", "rclone not found on PATH. Install with: brew install rclone")
             stats['errors'] += 1
             return stats
 
-        # Count files
         try:
             files = list(source_path.glob(file_pattern))
             stats['scanned'] = len(files)
 
-            # Safety check
             if min_files > 0 and len(files) < min_files:
-                warning(f"{source_name.title()} folder only has {len(files)} files. Expected {min_files}+.")
-                warning("This could indicate folder is empty or unmounted.")
-                warning("Backup aborted to prevent accidental deletion of remote files.")
+                reporter.log("warning", f"{source_name.title()} folder only has {len(files)} files. Expected {min_files}+.")
+                reporter.log("warning", "This could indicate folder is empty or unmounted.")
+                reporter.log("warning", "Backup aborted to prevent accidental deletion of remote files.")
                 stats['errors'] += 1
                 return stats
         except Exception as e:
-            print_error(f"Failed to scan {source_name} folder: {e}")
+            reporter.log("error", f"Failed to scan {source_name} folder: {e}")
             stats['errors'] += 1
             return stats
 
-        # Generate timestamped trash folder name
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         base = trash_base_path if trash_base_path is not None else HOMELAB_TRASH_PATH
         trash_folder = f"{base}/{source_name}_{timestamp}"
@@ -1025,7 +1028,6 @@ class PhotoWorkflow:
         remote_base = f':sftp,host="{HOMELAB_HOST}",user="{HOMELAB_USER}",ciphers="{RCLONE_SSH_CIPHER}":'
         dst = remote_base + str(remote_dest)
         trash_remote = remote_base + trash_folder
-
         src = str(source_path) + "/"  # trailing slash = sync contents
 
         cmd = [
@@ -1044,17 +1046,13 @@ class PhotoWorkflow:
         if dry_run:
             cmd.append("--dry-run")
 
-        info("Connecting via Tailscale...")
+        reporter.log("info", "Connecting via Tailscale...")
 
         # rclone -v --stats=1s produces multi-line blocks to stderr (merged via STDOUT).
         # Relevant line: "Transferred:\t   21.281 MiB / 40 MiB, 53%, 356.951 KiB/s, ETA 53s"
         # Without -v, rclone emits no stats at all when piped (non-TTY).
-        progress_pattern = re.compile(
-            r'Transferred:.*?,\s+(\d+)%,\s+([\d.]+\s*\S+/s),\s+ETA\s+(\S+)'
-        )
 
         try:
-            import os
             # rclone's Go SFTP library doesn't read ~/.ssh/config, so it won't find the
             # 1Password SSH agent via IdentityAgent. Set SSH_AUTH_SOCK explicitly so
             # rclone can authenticate using the same agent as plain ssh.
@@ -1074,7 +1072,6 @@ class PhotoWorkflow:
                 env=env,
             )
 
-            # Rich Progress bar for rclone
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[cyan]{task.description}"),
@@ -1088,7 +1085,7 @@ class PhotoWorkflow:
                 TextColumn("{task.fields[eta]}"),
                 TextColumn("•"),
                 TimeElapsedColumn(),
-                transient=True,  # Remove progress bar when done
+                transient=True,
             ) as progress:
                 task = progress.add_task(
                     f"Syncing {source_name}...",
@@ -1098,17 +1095,15 @@ class PhotoWorkflow:
                     eta="--"
                 )
 
-                # Also parse "Transferred:   N / M, XX%" for file count
-                files_pattern = re.compile(r'Transferred:\s+(\d+)\s*/\s*(\d+),\s+\d+%')
-
                 error_lines = []
                 transfers_started = False
+                current_files = "--"  # latest file-count string for transfer events
 
                 for line in iter(proc.stdout.readline, ''):
                     if not line:
                         break
 
-                    match = progress_pattern.search(line)
+                    match = _RCLONE_PCT_RE.search(line)
                     if match:
                         if not transfers_started:
                             transfers_started = True
@@ -1120,11 +1115,19 @@ class PhotoWorkflow:
                             speed=speed,
                             eta=f"ETA: {eta}"
                         )
+                        # Emit structured event for the SSE stream (no-op for RichReporter).
+                        reporter.event("transfer", {
+                            "pct": int(pct),
+                            "speed": speed,
+                            "eta": eta,
+                            "files": current_files,
+                        })
                     else:
-                        files_match = files_pattern.search(line)
+                        files_match = _RCLONE_FILES_RE.search(line)
                         if files_match:
                             done, total_files = files_match.groups()
-                            progress.update(task, files=f"{done}/{total_files} files")
+                            current_files = f"{done}/{total_files}"
+                            progress.update(task, files=f"{current_files} files")
                         if not transfers_started:
                             progress.update(task, description=f"Checking {source_name} files...")
                         stripped = line.strip()
@@ -1136,38 +1139,43 @@ class PhotoWorkflow:
             if proc.returncode == 0:
                 stats['sync_successful'] = True
                 stats['connection_method'] = 'tailscale'
-                info(f"[green]✓[/green] {source_name.title()} backup completed via Tailscale")
+                reporter.log("info", f"[green]✓[/green] {source_name.title()} backup completed via Tailscale")
                 return stats
             else:
                 stats['errors'] += 1
-                print_error(f"rclone failed (exit code: {proc.returncode})")
-                if error_lines:
-                    for err_line in error_lines[-5:]:  # Show last 5 error lines
-                        print_error(f"  {err_line}")
+                reporter.log("error", f"rclone failed (exit code: {proc.returncode})")
+                for err_line in error_lines[-5:]:
+                    reporter.log("error", f"  {err_line}")
 
         except Exception as e:
             stats['errors'] += 1
-            print_error(f"Backup failed: {e}")
+            reporter.log("error", f"Backup failed: {e}")
 
         return stats
 
-    def backup_raws_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
+    def backup_raws_to_homelab(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, any]:
         """
         Backup the RAWs folder to homelab HDD via rclone with parallel transfers.
 
         Args:
             dry_run: If True, simulate only
-            progress_callback: Deprecated, not used
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict with backup stats
         """
-        from photo_flow.console_utils import error as print_error
+        if reporter is None:
+            reporter = RichReporter()
 
-        # Check SSD connection (RAWs are on external drive)
         if not RAWS_PATH.exists():
-            print_error(f"RAWs folder not available at {RAWS_PATH}")
-            print_error("External SSD must be connected for RAWs backup")
+            reporter.log("error", f"RAWs folder not available at {RAWS_PATH}")
+            reporter.log("error", "External SSD must be connected for RAWs backup")
             return {'source': 'raws', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
         return self._run_backup_rclone(
@@ -1176,26 +1184,33 @@ class PhotoWorkflow:
             source_name='raws',
             dry_run=dry_run,
             min_files=100,
-            file_pattern='*.RAF'
+            file_pattern='*.RAF',
+            reporter=reporter,
         )
 
-    def backup_videos_to_homelab(self, dry_run: bool = False, progress_callback=None) -> Dict[str, any]:
+    def backup_videos_to_homelab(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, any]:
         """
         Backup the Videos folder to homelab HDD via rclone with parallel transfers.
 
         Args:
             dry_run: If True, simulate only
-            progress_callback: Deprecated, not used
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
 
         Returns:
             Dict with backup stats
         """
-        from photo_flow.console_utils import error as print_error
+        if reporter is None:
+            reporter = RichReporter()
 
-        # Check SSD connection (Videos are on external drive)
         if not SSD_PATH.exists():
-            print_error(f"Videos folder not available at {SSD_PATH}")
-            print_error("External SSD must be connected for Videos backup")
+            reporter.log("error", f"Videos folder not available at {SSD_PATH}")
+            reporter.log("error", "External SSD must be connected for Videos backup")
             return {'source': 'videos', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
         return self._run_backup_rclone(
@@ -1204,5 +1219,6 @@ class PhotoWorkflow:
             source_name='videos',
             dry_run=dry_run,
             min_files=10,
-            file_pattern='*.MOV'
+            file_pattern='*.MOV',
+            reporter=reporter,
         )

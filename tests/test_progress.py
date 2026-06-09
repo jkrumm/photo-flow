@@ -1,5 +1,5 @@
 """
-Tests for the ProgressReporter seam and its wiring in import_from_camera / finalize_staging.
+Tests for the ProgressReporter seam and its wiring across all PhotoWorkflow methods.
 
 FakeReporter records every call so we can assert the workflow drives the reporter correctly.
 All tests use dry_run=True and/or temp dirs — no real camera/Staging paths are touched.
@@ -300,3 +300,208 @@ def test_finalize_staging_no_staging_dir(tmp_path):
 
     assert reporter.task_calls() == []
     assert reporter.advance_calls() == []
+
+
+# ---------------------------------------------------------------------------
+# _parse_rclone_line helper
+# ---------------------------------------------------------------------------
+
+def test_parse_rclone_line_transfer():
+    """Speed/ETA line is parsed into pct, speed, eta keys."""
+    from photo_flow.workflow import _parse_rclone_line
+    line = "Transferred:   21.281 MiB / 40 MiB, 53%, 356.951 KiB/s, ETA 53s"
+    result = _parse_rclone_line(line)
+    assert result["pct"] == 53
+    assert "KiB/s" in result["speed"]
+    assert result["eta"] == "53s"
+    assert "files_done" not in result
+
+
+def test_parse_rclone_line_files():
+    """File-count line is parsed into files_done and files_total keys."""
+    from photo_flow.workflow import _parse_rclone_line
+    line = "Transferred:         5 / 10, 50%"
+    result = _parse_rclone_line(line)
+    assert result["files_done"] == 5
+    assert result["files_total"] == 10
+    assert "pct" not in result
+
+
+def test_parse_rclone_line_empty():
+    """Non-matching line returns empty dict."""
+    from photo_flow.workflow import _parse_rclone_line
+    result = _parse_rclone_line("2026/06/09 10:00:00 INFO  : some other rclone log line")
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# cleanup_unused_raws
+# ---------------------------------------------------------------------------
+
+def test_cleanup_unused_raws_orphans_progress(tmp_path):
+    """Orphaned RAFs trigger task(total=3) + advance×3 calls on the reporter."""
+    raws_dir = tmp_path / "raws"
+    raws_dir.mkdir()
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+    ssd_dir = tmp_path / "ssd"
+    ssd_dir.mkdir()
+
+    for i in range(3):
+        (raws_dir / f"DSCF000{i}.RAF").touch()
+    # No matching JPGs in final → all three RAFs are orphans.
+
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    with (
+        patch("photo_flow.workflow.RAWS_PATH", raws_dir),
+        patch("photo_flow.workflow.FINAL_PATH", final_dir),
+        patch("photo_flow.workflow.SSD_PATH", ssd_dir),
+    ):
+        stats = workflow.cleanup_unused_raws(dry_run=False, reporter=reporter)
+
+    assert stats["orphaned"] == 3
+    assert stats["deleted"] == 3
+    assert stats["errors"] == 0
+
+    task_calls = reporter.task_calls()
+    assert len(task_calls) == 1
+    assert task_calls[0][2] == 3  # total
+
+    advance_calls = reporter.advance_calls()
+    assert len(advance_calls) == 3
+
+
+def test_cleanup_unused_raws_no_ssd(tmp_path):
+    """Missing SSD → early return with a warning log, no task/advance calls."""
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    with patch("photo_flow.workflow.SSD_PATH", tmp_path / "missing_ssd"):
+        stats = workflow.cleanup_unused_raws(dry_run=False, reporter=reporter)
+
+    assert stats["orphaned"] == 0
+    assert reporter.task_calls() == []
+    assert reporter.advance_calls() == []
+    assert any("SSD" in c[2] for c in reporter.log_calls())
+
+
+def test_cleanup_unused_raws_dry_run(tmp_path):
+    """dry_run=True: orphans are counted but no task/advance (no deletion loop)."""
+    raws_dir = tmp_path / "raws"
+    raws_dir.mkdir()
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+    ssd_dir = tmp_path / "ssd"
+    ssd_dir.mkdir()
+
+    for i in range(2):
+        (raws_dir / f"DSCF000{i}.RAF").touch()
+
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    with (
+        patch("photo_flow.workflow.RAWS_PATH", raws_dir),
+        patch("photo_flow.workflow.FINAL_PATH", final_dir),
+        patch("photo_flow.workflow.SSD_PATH", ssd_dir),
+    ):
+        stats = workflow.cleanup_unused_raws(dry_run=True, reporter=reporter)
+
+    assert stats["orphaned"] == 2
+    assert stats["deleted"] == 0
+    # dry_run skips the deletion loop — no progress bar.
+    assert reporter.task_calls() == []
+    assert reporter.advance_calls() == []
+
+
+# ---------------------------------------------------------------------------
+# sync_gallery
+# ---------------------------------------------------------------------------
+
+def test_sync_gallery_dry_run_drives_reporter(tmp_path):
+    """dry_run=True: reporter gets task(total=N) + advance×N for metadata extraction."""
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+
+    for i in range(3):
+        (final_dir / f"DSCF000{i}.JPG").touch()
+
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    with (
+        patch("photo_flow.workflow.FINAL_PATH", final_dir),
+        patch("photo_flow.workflow.GALLERY_PATH", tmp_path / "gallery"),
+        patch(
+            "photo_flow.workflow.MetadataExtractor.extract_metadata",
+            return_value={"rating": 4, "filename": "test.JPG"},
+        ),
+    ):
+        stats = workflow.sync_gallery(dry_run=True, reporter=reporter)
+
+    assert stats["scanned"] == 3
+
+    task_calls = reporter.task_calls()
+    # First task = metadata extraction (total=3).
+    assert len(task_calls) >= 1
+    assert task_calls[0][2] == 3
+
+    # 3 advances for metadata + 3 advances for copying (all 3 are new since gallery is empty).
+    advance_calls = reporter.advance_calls()
+    assert len(advance_calls) == 6  # 3 metadata + 3 copy
+
+
+def test_sync_gallery_no_final_dir(tmp_path):
+    """Missing Final folder → early return with info log, no task calls."""
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    with patch("photo_flow.workflow.FINAL_PATH", tmp_path / "missing"):
+        stats = workflow.sync_gallery(dry_run=True, reporter=reporter)
+
+    assert stats["scanned"] == 0
+    assert reporter.task_calls() == []
+    assert any("Nothing to sync" in c[2] for c in reporter.log_calls())
+
+
+# ---------------------------------------------------------------------------
+# _run_backup_rclone emits "transfer" events
+# ---------------------------------------------------------------------------
+
+def test_run_backup_rclone_emits_transfer_events(tmp_path):
+    """When rclone outputs a stats line, reporter.event('transfer', ...) is emitted."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "photo.JPG").touch()  # min_files=0 so this is just for the glob
+
+    reporter = FakeReporter()
+    workflow = PhotoWorkflow()
+
+    # Simulate rclone stdout: one pct/speed/ETA line followed by stream end.
+    rclone_line = "Transferred:   21.281 MiB / 40 MiB, 53%, 356.951 KiB/s, ETA 53s\n"
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = [rclone_line, ""]
+    mock_proc.returncode = 0
+    mock_proc.wait = MagicMock()
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/rclone"),
+        patch("subprocess.Popen", return_value=mock_proc),
+    ):
+        stats = workflow._run_backup_rclone(
+            source_path=source_dir,
+            remote_dest=Path("/remote/final"),
+            source_name="final",
+            dry_run=False,
+            min_files=0,
+            reporter=reporter,
+        )
+
+    transfer_events = [c for c in reporter.event_calls() if c[1] == "transfer"]
+    assert len(transfer_events) >= 1
+    ev = transfer_events[0][2]
+    assert ev["pct"] == 53
+    assert "KiB/s" in ev["speed"]
+    assert ev["eta"] == "53s"
