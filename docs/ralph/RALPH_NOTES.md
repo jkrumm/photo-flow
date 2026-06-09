@@ -111,3 +111,51 @@ Created `photo_flow/api/jobs.py` (`Job`, `QueueReporter`, `JobManager`), `routes
 - The staging count cache (`_CACHE_TTL = 5s`) is module-level so it survives across test runs in the same process. A factory or `app.state` pattern would make it per-app for cleaner test isolation.
 - `GET /status/pending` creates a new `FileManager()` per-module (module-level singleton). If `FileManager._hash_cache` grows large, this lives for the process lifetime — acceptable for a single-process personal daemon.
 - Job history is unbounded (`_jobs` dict never pruned). A small LRU (keep last N jobs) would cap memory for a long-running daemon.
+
+## Group 5: Operation endpoints (dry-run preview + job-backed runs)
+
+### What was implemented
+Created `photo_flow/api/routes_ops.py` with six endpoints: `POST /ops/import`, `/ops/finalize`,
+`/ops/cleanup`, `/ops/sync-gallery`, `/ops/backup` (with `source: final|raws|videos|all`), and
+`GET /backup/availability`. Each POST follows the confirmation flow — `dry_run=true` runs the
+workflow method synchronously with `NullReporter` and returns the result dict (200); `dry_run=false`
+delegates to `JobManager.start()` and returns `{"job_id": …}` (202). Registered the router in
+`app.py`. Added 18 tests in `tests/test_api_ops.py` covering dry-run key shapes, 202/409 single-flight,
+and backup source routing.
+
+### Deviations from prompt
+- `GET /backup/availability` was placed inside `routes_ops.py` (same file as the ops) rather than a
+  separate file — it's logically part of the backup concern and the file stays readable.
+- The availability endpoint uses `asyncio.to_thread` for the potentially-blocking SSH check (even
+  though other dry-run calls stay synchronous per the PRD) — correctness over strict PRD adherence.
+- Pydantic response models are defined and referenced via `responses=` kwargs (documentation only,
+  no runtime validation for the 202 path). This avoids a return-type mismatch between the two
+  response codes while still populating OpenAPI.
+
+### Gotchas & surprises
+- `monkeypatch.setattr(routes_ops_module, "_workflow", mock)` works because endpoint functions look
+  up `_workflow` in the module's global namespace at call time (not at route-registration time).
+  Replacing the module attribute is therefore sufficient — no factory or DI pattern needed.
+- `BackupAvailabilityResponse` construction requires building `BackupSourceInfo` objects explicitly
+  because `get_backup_availability` returns nested dicts (not Pydantic instances).
+- Python 3.9 doesn't support `list[str]` in Pydantic v1 without `from __future__ import annotations`
+  or using `List[str]`. Used `List` from `typing` for compatibility.
+
+### Security notes
+- All endpoints are inside the FastAPI app bound to `127.0.0.1:7720` — no additional authz needed.
+- Single-flight lock (`JobManager._running`) prevents concurrent destructive ops.
+- `dry_run=true` path never touches real files — uses `NullReporter`, same code path.
+
+### Tests added
+- `tests/test_api_ops.py` — 18 tests across 4 test classes:
+  - `TestDryRunReturnsExpectedKeys` — all ops return correct dict keys on dry_run=true
+  - `TestRealRunJobFlow` — 202 on real run, 409 on concurrent run, cross-op conflict
+  - `TestBackupSourceRouting` — source routing, order guarantee, default=all, invalid→422
+  - `TestBackupAvailability` — shape, Path serialization
+
+### Future improvements
+- Response models could be made strict (using `response_model=` on the decorator) by splitting
+  dry_run/real endpoints into two routes each — at the cost of doubling the route count.
+- The `backup availability` endpoint builds Pydantic instances manually; a helper that transforms
+  the raw dict would be cleaner if `get_backup_availability` shape changes.
+- Job history for ops is unbounded (same issue as noted in Group 4).
