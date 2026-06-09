@@ -63,3 +63,13 @@ photo_gallery/**/env.d.ts
 
 # Astro workspace settings
 *.code-workspace
+
+# RALPH loop artifacts
+.ralph-tasks.json
+.ralph-logs/
+.ralph-lock
+.ralph-secrets.env
+
+# Control panel web build
+control_panel/web/node_modules/
+control_panel/web/dist/
