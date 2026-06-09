@@ -305,3 +305,47 @@ None — chart primitives are browser-rendering code. `npm run build` (strict TS
 - Consider adding `HoverContext.Provider` at the Analytics page level to enable cross-chart cursor sync once multiple charts are present.
 - The `no-underscore-dangle` warnings could be suppressed via an oxlint allow-list (`__y`, `__d`) if they become noisy.
 - Consider `build.rolldownOptions.output.codeSplitting` once more routes are added to split the Mantine vendor chunk.
+
+## Group 10: Pipeline hero — animated Camera → Staging → Final → Publish
+
+### What was implemented
+Created `src/components/pipeline/PipelineHero.tsx` — the signature hero component with 4+2 stage nodes (Camera, Staging, Final, Homelab, Gallery) connected by animated SVG edges and CSS `offset-path` particle flows. Added `src/lib/queries/analytics.ts` and `src/lib/queries/backup.ts` for the `GET /analytics/summary` and `GET /backup/availability` endpoints (30s stale, 60s interval). Added `useActiveJobStore` to `src/lib/store.ts` — the shared active-job contract for Group 11. Updated `src/routes/pipeline.tsx` to render the hero.
+
+### Deviations from prompt
+- Used a DOM-measurement approach (refs + ResizeObserver + `getBoundingClientRect`) for SVG path computation rather than hardcoded proportional coordinates. This makes the layout fully responsive at no cost.
+- Framer-motion particles use CSS `offset-path: path(...)` on `motion.div` (HTML elements) rather than SVG `<animateMotion>`. Both work in modern browsers; the HTML approach keeps particle rendering in the same layer as the node cards and avoids SVG-coordinate/foreignObject complexity.
+- The BranchArrow between Final and the Publish column is a static SVG (no framer-motion) — it diverges from the simple horizontal edges and doesn't need animation since no single op covers both backup+sync simultaneously.
+- `galleryCount` is sourced from `backupAvail.final.remote_count` (the count FastAPI's availability check returns from the remote path) rather than a separate gallery-specific endpoint. This correctly reflects "files on the remote" rather than an index-derived number.
+
+### Gotchas & surprises
+- CSS `offset-path: path()` requires the container to be `position: relative` and the particle `position: absolute` with `top: 0; left: 0` for the coordinate system to match the SVG overlay. Without this, particles drift.
+- framer-motion v12 still uses `import { motion, AnimatePresence } from 'framer-motion'` — no import path change from v10/v11.
+- `useLayoutEffect` is necessary (not `useEffect`) for the ResizeObserver registration, otherwise there's a single-frame flash of no-path SVG on first render.
+- The oxlint `eqeqeq` rule blocks `!= null` — replaced with `!== null && !== undefined`.
+- Warnings for `no-underscore-dangle` on vendored chart kinds are pre-existing and exit 0 — not introduced by Group 10.
+
+### Active-job store contract (Group 11 interface)
+```ts
+// import from src/lib/store.ts
+const { setActiveJob, clearActiveJob } = useActiveJobStore()
+
+// Call when SSE stream for a job starts:
+setActiveJob(jobId, 'import' | 'finalize' | 'cleanup' | 'sync-gallery' | 'backup')
+
+// Call when SSE emits 'done' or 'error':
+clearActiveJob()
+```
+`PipelineHero` reads `activeOp` and animates the matching edge (dashed highlight + 3 particles). The legend row shows a pulsing "op running" badge.
+
+### Security notes
+- All API calls are same-origin reads (GET). No auth or CSRF concerns.
+- The `op` click handlers navigate to `/operations` (no destructive action from the hero itself).
+
+### Tests added
+None — browser-rendering component. `npm run build && npm run lint` are the correctness gates.
+
+### Future improvements
+- Wire `galleryCount` to a dedicated `/analytics/gallery-count` endpoint if the remote-count in availability response proves unreliable (it requires SSH reachability).
+- Add `this_month_count` from the summary as a secondary metric on the Final node ("N this month").
+- The Publish column could show the gallery URL as a link once Group 12 wires up library health.
+- Consider code-splitting PipelineHero (framer-motion is the bulk of the pipeline chunk at ~135 kB gz 44 kB) via a dynamic import once the page count grows.
