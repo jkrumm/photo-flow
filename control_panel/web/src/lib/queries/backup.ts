@@ -8,4 +8,11 @@ export const backupQueries = {
     staleTime: 30_000,
     refetchInterval: 60_000,
   }),
+  availabilityRemote: () => ({
+    queryKey: ['backup', 'availability', 'remote'] as const,
+    queryFn: () =>
+      api.get<BackupAvailabilityResponse>('/backup/availability?check_remote=true'),
+    staleTime: 120_000,
+    refetchInterval: 180_000,
+  }),
 }

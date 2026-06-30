@@ -23,10 +23,31 @@ export type PendingResponse = {
 
 // ── Jobs ─────────────────────────────────────────────────────────────────────
 
-export type JobStatus = 'pending' | 'running' | 'done' | 'failed'
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'needs_confirm'
 
+/** Response from POST /ops/* — job is always admitted to the FIFO queue. */
 export type JobStarted = {
   job_id: string
+  /** Always 'queued'; the worker transitions it to 'running' asynchronously. */
+  status: 'queued'
+  /** 0-based position in the queue (0 = next to run). */
+  position: number
+}
+
+/** One entry in the GET /jobs list. */
+export type JobQueueItem = {
+  job_id: string
+  op: string
+  status: JobStatus
+  seq: number
+  position: number
+  result: Record<string, unknown> | null
+  error: string | null
+  fresh_preview: Record<string, unknown> | null
+}
+
+export type JobListResponse = {
+  jobs: JobQueueItem[]
 }
 
 export type JobResponse = {
@@ -144,6 +165,15 @@ export type BackupAvailabilityResponse = {
 
 export type BackupSource = 'final' | 'raws' | 'videos' | 'all'
 
+// ── Gallery ───────────────────────────────────────────────────────────────────
+
+export type GallerySyncStatusResponse = {
+  target: number
+  current: number
+  pending: number
+  up_to_date: boolean
+}
+
 // ── Analytics ─────────────────────────────────────────────────────────────────
 
 export type BucketGrain = 'day' | 'week' | 'month' | 'year'
@@ -220,4 +250,28 @@ export type LibraryHealthResponse = {
   raws_available: boolean
   final_count: number
   raws_count: number
+}
+
+// ── Pipeline ──────────────────────────────────────────────────────────────────
+
+export type LastRun = { ts: string | null; ok: boolean } | null
+
+export type PipelineStatus = {
+  camera_connected: boolean
+  ssd_connected: boolean
+  staging_files: number
+  pending_photos: number
+  pending_videos: number
+  pending_raws: number
+  final_count: number
+  /** Final JPGs with rating ≥ 4 that are not yet in the gallery. */
+  unpublished_high_rated: number
+  orphaned_raws: number
+  last_runs: {
+    import: LastRun
+    finalize: LastRun
+    'sync-gallery': LastRun
+    backup: LastRun
+    cleanup: LastRun
+  }
 }

@@ -8,6 +8,7 @@
  *   import { api } from './api'
  *   const status = await api.get<StatusResponse>('/status')
  *   const job = await api.post<JobStarted>('/ops/import')
+ *   const job2 = await api.post<JobStarted>('/ops/cleanup', {}, { approved_preview: preview })
  */
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
@@ -21,17 +22,31 @@ function buildUrl(path: string, params?: QueryParams): string {
   return `${BASE}${path}?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)]))}`
 }
 
-async function request<T>(method: string, path: string, params?: QueryParams): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  params?: QueryParams,
+  body?: Record<string, unknown>,
+): Promise<T> {
   const url = buildUrl(path, params)
-  const res = await fetch(url, { method })
+  const hasBody = body !== undefined && body !== null
+  // exactOptionalPropertyTypes forbids explicit `undefined` for optional RequestInit fields.
+  // Spread headers + body conditionally so they are simply absent when not needed.
+  const res = await fetch(url, {
+    method,
+    ...(hasBody
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : {}),
+  })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API ${method} ${path} → ${res.status}: ${body}`)
+    const text = await res.text().catch(() => '')
+    throw new Error(`API ${method} ${path} → ${res.status}: ${text}`)
   }
   return res.json() as Promise<T>
 }
 
 export const api = {
   get: <T>(path: string, params?: QueryParams) => request<T>('GET', path, params),
-  post: <T>(path: string, params?: QueryParams) => request<T>('POST', path, params),
+  post: <T>(path: string, params?: QueryParams, body?: Record<string, unknown>) =>
+    request<T>('POST', path, params, body),
 }

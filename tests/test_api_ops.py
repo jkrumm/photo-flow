@@ -197,6 +197,8 @@ class TestRealRunJobFlow:
         data = resp.json()
         assert "job_id" in data
         assert data["job_id"]  # non-empty string
+        assert "status" in data
+        assert "position" in data
 
     def test_import_returns_job_id(self, monkeypatch):
         mock = _make_mock_workflow()
@@ -206,8 +208,8 @@ class TestRealRunJobFlow:
         assert resp.status_code == 202
         assert "job_id" in resp.json()
 
-    def test_concurrent_real_op_returns_409(self, monkeypatch):
-        """Starting a second mutating op while one is running returns 409."""
+    def test_concurrent_real_ops_both_enqueued(self, monkeypatch):
+        """Starting a second mutating op while one is running ENQUEUES it (no 409)."""
         mock = _make_mock_workflow()
 
         # Make finalize_staging slow so the background task is still running
@@ -223,12 +225,14 @@ class TestRealRunJobFlow:
             resp1 = client.post("/ops/finalize")
             assert resp1.status_code == 202, "First request should succeed"
 
-            # _running is True immediately after start() — before any await.
+            # Second request is ENQUEUED (not rejected).
             resp2 = client.post("/ops/finalize")
-            assert resp2.status_code == 409, "Second concurrent request should be rejected"
+            assert resp2.status_code == 202, "Second request should be queued (not 409)"
+            data2 = resp2.json()
+            assert "job_id" in data2
 
-    def test_different_ops_also_conflict(self, monkeypatch):
-        """Single-flight lock applies across all op types."""
+    def test_different_ops_both_enqueued(self, monkeypatch):
+        """Jobs of different op types both enqueue successfully (no single-flight reject)."""
         mock = _make_mock_workflow()
 
         def slow_import(dry_run=False, reporter=None, progress_callback=None):
@@ -242,9 +246,10 @@ class TestRealRunJobFlow:
             resp1 = client.post("/ops/import")
             assert resp1.status_code == 202
 
-            # Finalize should also be rejected while import is running.
+            # Finalize enqueues behind import — no rejection.
             resp2 = client.post("/ops/finalize")
-            assert resp2.status_code == 409
+            assert resp2.status_code == 202
+            assert "job_id" in resp2.json()
 
 
 # ---------------------------------------------------------------------------

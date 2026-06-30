@@ -40,6 +40,7 @@ export default defineConfig({
       '/analytics': { target: apiTarget, changeOrigin: true },
       '/index': { target: apiTarget, changeOrigin: true },
       '/backup': { target: apiTarget, changeOrigin: true },
+      '/gallery': { target: apiTarget, changeOrigin: true },
     },
   },
   resolve: {

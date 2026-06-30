@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { Badge, Button, Card, Group, SimpleGrid, Skeleton, Stack, Text, Title } from '@mantine/core'
 import { IconHeartbeat, IconRefresh, IconAlertTriangle, IconCheck } from '@tabler/icons-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -85,6 +85,7 @@ function IndexRefreshCard() {
 // ── Orphaned RAWs ─────────────────────────────────────────────────────────────
 
 function OrphanedRawsCard() {
+  const navigate = useNavigate()
   const { data, isLoading } = useQuery(analyticsQueries.libraryHealth())
 
   if (isLoading) return <Skeleton h={100} radius="md" />
@@ -148,13 +149,16 @@ function OrphanedRawsCard() {
           <Group gap="sm">
             <IconAlertTriangle size={14} style={{ color: VX.warn }} />
             <Text size="xs" style={{ color: VX.warn }}>
-              Run the Cleanup operation to remove these files.
+              {orphaned} orphaned RAW{orphaned !== 1 ? 's' : ''} have no matching Final JPG.
             </Text>
-            <Link to="/operations">
-              <Text size="xs" style={{ color: VX.photo.published, textDecoration: 'underline' }}>
-                Go to Operations →
-              </Text>
-            </Link>
+            <Button
+              size="xs"
+              variant="subtle"
+              style={{ color: VX.photo.published, padding: '2px 6px' }}
+              onClick={() => void navigate({ to: '/pipeline', search: { action: 'cleanup' } })}
+            >
+              Run Cleanup →
+            </Button>
           </Group>
         )}
       </Stack>
@@ -243,7 +247,8 @@ function BackupSourceCard({
 }
 
 function BackupSection() {
-  const { data, isLoading } = useQuery(backupQueries.availability())
+  const navigate = useNavigate()
+  const { data, isLoading } = useQuery(backupQueries.availabilityRemote())
 
   if (isLoading) {
     return (
@@ -272,6 +277,23 @@ function BackupSection() {
         >
           {connectionOk ? `Connected via ${data.connection}` : 'Not connected'}
         </Badge>
+        <Button
+          size="xs"
+          variant="subtle"
+          ml="auto"
+          style={{ color: VX.photo.final }}
+          onClick={() => void navigate({ to: '/pipeline', search: { action: 'backup' } })}
+        >
+          Run Backup →
+        </Button>
+        <Button
+          size="xs"
+          variant="subtle"
+          style={{ color: VX.photo.published }}
+          onClick={() => void navigate({ to: '/pipeline', search: { action: 'sync' } })}
+        >
+          Sync Gallery →
+        </Button>
       </Group>
 
       <SimpleGrid cols={{ base: 1, sm: 3 }}>

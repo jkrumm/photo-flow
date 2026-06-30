@@ -4,6 +4,7 @@ Tests for the ProgressReporter seam and its wiring across all PhotoWorkflow meth
 FakeReporter records every call so we can assert the workflow drives the reporter correctly.
 All tests use dry_run=True and/or temp dirs — no real camera/Staging paths are touched.
 """
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -22,6 +23,7 @@ class FakeReporter:
 
     def __init__(self):
         self.calls: list = []
+        self.cancelled = False  # set True in a test to simulate a Stop request
 
     def task(self, desc: str, total: int) -> None:
         self.calls.append(("task", desc, total))
@@ -34,6 +36,9 @@ class FakeReporter:
 
     def event(self, type: str, payload: dict) -> None:
         self.calls.append(("event", type, payload))
+
+    def is_cancelled(self) -> bool:
+        return self.cancelled
 
     def __enter__(self):
         return self
@@ -302,6 +307,55 @@ def test_finalize_staging_no_staging_dir(tmp_path):
     assert reporter.advance_calls() == []
 
 
+def test_finalize_cancel_skips_raw_deletion(tmp_path):
+    """When the reporter is already cancelled, finalize returns after Step 1 without
+    deleting any RAW files — neither camera RAWs nor orphaned local RAWs."""
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+    camera_dir = tmp_path / "camera" / "DCIM" / "100FUJI"
+    camera_dir.mkdir(parents=True)
+    raws_dir = tmp_path / "raws"
+    raws_dir.mkdir()
+    ssd_dir = tmp_path / "ssd"
+    ssd_dir.mkdir()
+
+    # Create a staging JPG (so the method enters the Step 1 loop).
+    (staging_dir / "DSCF0001.JPG").touch()
+    # Create a camera RAW and a local orphaned RAW — these must NOT be deleted.
+    camera_raf = camera_dir / "DSCF0001.RAF"
+    camera_raf.touch()
+    orphan_raf = raws_dir / "DSCF9999.RAF"
+    orphan_raf.touch()
+
+    reporter = FakeReporter()
+    reporter.cancelled = True  # simulate watchdog/Stop pressed before Step 1 begins
+
+    workflow = PhotoWorkflow()
+
+    with (
+        patch("photo_flow.workflow.STAGING_PATH", staging_dir),
+        patch("photo_flow.workflow.FINAL_PATH", final_dir),
+        patch("photo_flow.workflow.CAMERA_PATH", camera_dir.parent.parent),
+        patch("photo_flow.workflow.RAWS_PATH", raws_dir),
+        patch("photo_flow.workflow.SSD_PATH", ssd_dir),
+        patch.object(
+            workflow.file_manager,
+            "scan_camera_files",
+            return_value={".RAF": [camera_raf], ".JPG": [], ".MOV": []},
+        ),
+    ):
+        stats = workflow.finalize_staging(dry_run=False, reporter=reporter)
+
+    # No RAWs must have been deleted.
+    assert camera_raf.exists(), "Camera RAW must not be deleted after a cancelled finalize"
+    assert orphan_raf.exists(), "Orphaned local RAW must not be deleted after a cancelled finalize"
+    # Counts reflect no deletions.
+    assert stats["deleted_camera_raws"] == 0
+    assert stats["deleted_raws"] == 0
+
+
 # ---------------------------------------------------------------------------
 # _parse_rclone_line helper
 # ---------------------------------------------------------------------------
@@ -505,3 +559,104 @@ def test_run_backup_rclone_emits_transfer_events(tmp_path):
     assert ev["pct"] == 53
     assert "KiB/s" in ev["speed"]
     assert ev["eta"] == "53s"
+
+
+def test_run_backup_rclone_honors_cancel(tmp_path):
+    """A cancel request terminates the rclone subprocess and reports cancelled, not success."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "photo.JPG").touch()
+
+    reporter = FakeReporter()
+    reporter.cancelled = True  # user clicked Stop before the first stats line
+    workflow = PhotoWorkflow()
+
+    mock_proc = MagicMock()
+    mock_proc.stdout.readline.side_effect = [
+        "Transferred:   1 MiB / 40 MiB, 2%, 5 MiB/s, ETA 8s\n", "",
+    ]
+    mock_proc.returncode = -15  # SIGTERM
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/rclone"),
+        patch("subprocess.Popen", return_value=mock_proc),
+    ):
+        stats = workflow._run_backup_rclone(
+            source_path=source_dir,
+            remote_dest=Path("/remote/final"),
+            source_name="final",
+            dry_run=False,
+            min_files=0,
+            reporter=reporter,
+        )
+
+    mock_proc.terminate.assert_called_once()
+    assert stats.get("cancelled") is True
+    assert stats.get("sync_successful") is not True
+
+
+def test_get_gallery_sync_status_symmetric_diff(tmp_path, monkeypatch):
+    """pending is the symmetric diff of high-rated Final names vs gallery folder (catches swaps)."""
+    from photo_flow import workflow as wfmod
+    import photo_flow.index.db as dbmod
+
+    gallery = tmp_path / "gallery"
+    (gallery / "images").mkdir(parents=True)
+    (gallery / "images" / "a.JPG").touch()  # published
+    (gallery / "images" / "b.JPG").touch()  # published but rating since dropped → should be removed
+    monkeypatch.setattr(wfmod, "GALLERY_PATH", gallery)
+
+    class FakeConn:
+        def execute(self, _sql):
+            return [("/Final/a.JPG",), ("/Final/c.JPG",)]  # 4★ keepers: a (in gallery), c (missing)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(dbmod, "get_db", lambda *a, **k: FakeConn())
+
+    status = PhotoWorkflow().get_gallery_sync_status()
+    assert status["target"] == 2          # a, c
+    assert status["current"] == 2         # a, b
+    assert status["pending"] == 2         # {c to publish, b to remove}
+    assert status["up_to_date"] is False
+
+
+def test_prune_remote_trash_keeps_recent_purges_old(monkeypatch):
+    """Retention keys off the folder-name timestamp (when trashed), NOT file mtime.
+
+    Locks the bug we hit live: rclone preserves each RAW's original capture-time mtime, so an
+    mtime-based sweep would delete a freshly-trashed folder of months-old photos immediately.
+    """
+    from photo_flow import workflow as wfmod
+
+    now = datetime.now()
+    old = (now - timedelta(days=40)).strftime("%Y-%m-%d_%H-%M")
+    recent = (now - timedelta(days=5)).strftime("%Y-%m-%d_%H-%M")
+    listing = f"raws_{old}/\nfinal_{old}/\nraws_{recent}/\nunrecognized_dir/\n"
+
+    purged: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        m = MagicMock()
+        m.returncode = 0
+        if "lsf" in cmd:
+            m.stdout = listing
+        elif "purge" in cmd:
+            purged.append(cmd[-1])
+            m.stdout = ""
+        else:
+            m.stdout = ""
+        return m
+
+    monkeypatch.setattr(wfmod.subprocess, "run", fake_run)
+
+    PhotoWorkflow()._prune_remote_trash(
+        Path("/mnt/hdd/fuji/.trash"), retention_days=30, reporter=FakeReporter()
+    )
+
+    assert any(f"raws_{old}" in p for p in purged), "old folder must be purged"
+    assert any(f"final_{old}" in p for p in purged), "old folder (any source prefix) must be purged"
+    assert not any(recent in p for p in purged), "within-window folder must be kept"
+    assert not any("unrecognized_dir" in p for p in purged), "undateable name must never be purged"
+    assert len(purged) == 2

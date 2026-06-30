@@ -73,3 +73,6 @@ photo_gallery/**/env.d.ts
 # Control panel web build
 control_panel/web/node_modules/
 control_panel/web/dist/
+
+# Claude Code config (global skills + local settings — not project files)
+.claude/

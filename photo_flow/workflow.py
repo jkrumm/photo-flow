@@ -7,8 +7,9 @@ import logging
 import os
 import re
 import shutil
+import socket
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
 from typing import Dict, List, Optional
@@ -17,7 +18,7 @@ from photo_flow.config import (
     CAMERA_PATH, STAGING_PATH, RAWS_PATH, FINAL_PATH, SSD_PATH, GALLERY_PATH,
     GALLERY_REMOTE_USER, GALLERY_REMOTE_HOST, GALLERY_REMOTE_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
-    HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
+    HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_HDD_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
     RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
@@ -25,9 +26,29 @@ from photo_flow.metadata_extractor import MetadataExtractor
 from photo_flow.console_utils import console, create_progress, show_status, info, warning, error
 from photo_flow.progress import ProgressReporter, RichReporter
 from photo_flow.immich_client import trigger_immich_scan
-from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, is_already_renamed
+from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_original_base, correlation_base, is_already_renamed
 
 logger = logging.getLogger(__name__)
+
+
+def compute_raw_keep_bases() -> set:
+    """
+    Bases of every JPG we still have a stake in, used to decide which local RAWs are orphaned.
+
+    A RAW is orphaned only if its base matches no JPG in *either* Final (finalized keepers)
+    *or* Staging (imported, not yet finalized/rated). Matching is Photomator-suffix tolerant
+    (see correlation_base) so DSCF0770_2.jpg protects DSCF0770.RAF. Excluding Staging would
+    delete the RAW backups of photos still awaiting finalize — irreversible data loss.
+
+    Returns:
+        Set of correlation bases (e.g. {"DSCF0430", ...}) for all Final + Staging JPGs.
+    """
+    keep = set()
+    if FINAL_PATH.exists():
+        keep.update(correlation_base(j.name) for j in scan_for_images(FINAL_PATH, '.JPG'))
+    if STAGING_PATH.exists():
+        keep.update(correlation_base(j.name) for j in scan_for_images(STAGING_PATH, '.JPG'))
+    return keep
 
 # ---------------------------------------------------------------------------
 # rclone line-parser — module-level so tests can import it directly
@@ -209,6 +230,41 @@ class PhotoWorkflow:
             reporter.log("info", "No new files to import")
             return {'videos': 0, 'photos': 0, 'raws': 0, 'skipped': 0, 'errors': 0}
 
+        # Dry-run path: skip the expensive generate_timestamped_filename() calls
+        # (each spawns an exiftool subprocess over USB) but still drive the reporter
+        # so callers that depend on the reporter contract (tests, SSE stream) get
+        # the full task / advance / event sequence with the original filenames.
+        if dry_run:
+            reporter.log(
+                "info",
+                f"Dry run: would import {len(mov_files)} videos, "
+                f"{len(jpg_files)} photos, {len(raf_files)} RAWs",
+            )
+            # Build the same (file, type) pairs the real loop uses.
+            dry_run_pairs: list[tuple] = (
+                [(f, "video") for f in mov_files]
+                + [(f, "photo") for f in jpg_files]
+                + [(f, "RAW") for f in raf_files]
+            )
+            with reporter:
+                reporter.task(
+                    f"[cyan]Dry run: {total_files} files to import",
+                    total_files,
+                )
+                for file_path, ftype in dry_run_pairs:
+                    reporter.event(
+                        "file_done",
+                        {"filename": file_path.name, "dest": "", "type": ftype, "action": "dry_run"},
+                    )
+                    reporter.advance()
+            return {
+                'videos': len(mov_files),
+                'photos': len(jpg_files),
+                'raws': len(raf_files),
+                'skipped': 0,
+                'errors': 0,
+            }
+
         all_files = []
         file_destinations = []
         file_types = []
@@ -251,22 +307,14 @@ class PhotoWorkflow:
             )
 
             for file_path, dest, ftype, should_delete in zip(all_files, file_destinations, file_types, delete_flags):
+                if reporter.is_cancelled():
+                    reporter.log("warning", "Import cancelled — stopping (already-imported files are kept)")
+                    break
+
                 # Generate timestamped filename
                 new_filename, ts_error = generate_timestamped_filename(file_path, existing_names[dest])
                 if ts_error:
                     logger.warning(f"Using original name: {ts_error}")
-
-                if dry_run:
-                    if ftype == "video":
-                        mov_count += 1
-                    elif ftype == "photo":
-                        jpg_count += 1
-                    else:
-                        raf_count += 1
-                    existing_names[dest].add(new_filename)
-                    reporter.event("file_done", {"filename": new_filename, "dest": str(dest), "type": ftype, "action": "dry_run"})
-                    reporter.advance()
-                    continue
 
                 dst_path = dest / new_filename
 
@@ -316,8 +364,17 @@ class PhotoWorkflow:
                                 errors += 1
                     else:
                         action = "error"
-                        reporter.log("error", f"Failed to copy {file_path.name}: {copy_error}")
                         errors += 1
+                        # Fail fast on permission errors: they are not per-file recoverable
+                        # (a denied volume denies every file), so aborting after the first
+                        # beats churning through hundreds of identical failures.
+                        if "Operation not permitted" in copy_error or "Permission denied" in copy_error:
+                            raise PermissionError(
+                                f"Permission denied writing to {dest}. The photoflow background "
+                                f"service lacks macOS access to that volume — grant its Python "
+                                f"binary Full Disk Access, then restart the service. ({copy_error})"
+                            )
+                        reporter.log("error", f"Failed to copy {file_path.name}: {copy_error}")
 
                 reporter.event("file_done", {"filename": new_filename, "dest": str(dest), "type": ftype, "action": action})
                 reporter.advance()
@@ -388,6 +445,10 @@ class PhotoWorkflow:
             )
 
             for staging_file in staging_files:
+                if reporter.is_cancelled():
+                    reporter.log("warning", "Finalize cancelled — stopping (remaining files stay in Staging)")
+                    break
+
                 final_path = FINAL_PATH / staging_file.name
                 sidecar_src = staging_file.with_suffix('.photo-edit')
                 sidecar_dst = FINAL_PATH / sidecar_src.name
@@ -445,6 +506,12 @@ class PhotoWorkflow:
 
                 reporter.advance()
 
+        # Cancel gate: if Step 1 was interrupted, skip all RAW-deletion steps so a
+        # cancelled/watchdog-timed-out finalize never deletes RAWs it didn't finish reviewing.
+        if reporter.is_cancelled():
+            logger.warning("Finalize cancelled — skipping RAW deletion steps")
+            return stats
+
         # Step 2: Delete RAW files from camera for finalized images
         # Note: RAW files are now deleted during import, so this will typically find nothing.
         # Kept for backwards compatibility in case RAWs are manually added to camera.
@@ -460,6 +527,8 @@ class PhotoWorkflow:
             if finalized_raws:
                 reporter.log("info", f"Deleting {len(finalized_raws)} RAW files from camera")
                 for raw_file in finalized_raws:
+                    if reporter.is_cancelled():
+                        break
                     if not dry_run:
                         try:
                             raw_file.unlink()
@@ -472,11 +541,11 @@ class PhotoWorkflow:
 
         # Step 4: Clean up orphaned local RAW files
         if RAWS_PATH.exists() and FINAL_PATH.exists():
-            final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-            # Use extract_original_base to handle both old and timestamp-renamed files
-            final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
+            # Keep RAWs whose JPG is in Final OR still in Staging (awaiting finalize),
+            # Photomator-suffix tolerant — see compute_raw_keep_bases.
+            keep_bases = compute_raw_keep_bases()
             raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
-            orphaned_raws = [raw_file for raw_file in raw_files if extract_original_base(raw_file.name) not in final_jpg_bases]
+            orphaned_raws = [raw_file for raw_file in raw_files if correlation_base(raw_file.name) not in keep_bases]
 
             stats['orphaned_raws'] = len(orphaned_raws)
 
@@ -484,6 +553,8 @@ class PhotoWorkflow:
                 reporter.log("info", f"Found {len(orphaned_raws)} orphaned local RAW files")
                 if not dry_run:
                     for raw_file in orphaned_raws:
+                        if reporter.is_cancelled():
+                            break
                         try:
                             raw_file.unlink()
                             stats['deleted_raws'] += 1
@@ -536,19 +607,16 @@ class PhotoWorkflow:
 
         reporter.log("info", "Scanning for orphaned RAW files...")
 
-        # Get all JPGs in the final folder
-        final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
-
-        # Extract original base filenames from final JPGs (handles both old and timestamp-renamed files)
-        final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
+        # Keep RAWs whose JPG is in Final OR still in Staging (imported, awaiting finalize).
+        # Photomator-suffix tolerant — see compute_raw_keep_bases.
+        keep_bases = compute_raw_keep_bases()
 
         # Get all RAFs in the RAWs folder
         raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
 
-        # Find orphaned RAWs (those without a corresponding JPG in final)
-        # Compare using original base to handle timestamp-renamed files
+        # Find orphaned RAWs (those whose base matches no Final or Staging JPG)
         orphaned_raws = [raw_file for raw_file in raw_files
-                         if extract_original_base(raw_file.name) not in final_jpg_bases]
+                         if correlation_base(raw_file.name) not in keep_bases]
 
         stats['orphaned'] = len(orphaned_raws)
         reporter.log("info", f"Found {len(orphaned_raws)} orphaned RAW files")
@@ -560,6 +628,9 @@ class PhotoWorkflow:
                     len(orphaned_raws)
                 )
                 for raw_file in orphaned_raws:
+                    if reporter.is_cancelled():
+                        reporter.log("warning", "Cleanup cancelled — stopping")
+                        break
                     try:
                         raw_file.unlink()
                         stats['deleted'] += 1
@@ -598,6 +669,48 @@ class PhotoWorkflow:
             report.pending_raws = len(files.get('.RAF', []))
 
         return report
+
+    def get_gallery_sync_status(self) -> Dict[str, int]:
+        """
+        Cheap freshness check for the gallery: which rating>=4 Final photos *should* be published
+        vs which image files are currently in the gallery folder.
+
+        Name/set-based (no hashing): compares high-rated Final filenames (from the metadata index)
+        to the gallery's images dir. `pending` is the symmetric difference — new keepers to publish
+        plus dropped photos to remove — so a same-count swap is still caught. Does NOT detect an
+        in-place re-edit of an already-published photo (that needs a full sync_gallery run); good
+        enough to drive the "up to date" UI. Relies on index freshness, same as the analytics tiles.
+
+        Returns:
+            {'target': int, 'current': int, 'pending': int, 'up_to_date': bool}
+        """
+        from photo_flow.index.db import get_db
+
+        gallery_images_path = GALLERY_PATH / "images"
+        current_names: set = set()
+        if gallery_images_path.exists():
+            current_names = {p.name for p in scan_for_images(gallery_images_path, '.JPG')}
+
+        target_names: set = set()
+        try:
+            conn = get_db()
+            try:
+                for row in conn.execute(
+                    "SELECT path FROM photos WHERE in_final = 1 AND rating >= 4"
+                ):
+                    target_names.add(Path(row[0]).name)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug(f"Gallery status: index unavailable ({e}); falling back to count only")
+
+        pending = len(target_names ^ current_names)
+        return {
+            'target': len(target_names),
+            'current': len(current_names),
+            'pending': pending,
+            'up_to_date': pending == 0,
+        }
 
     def sync_gallery(
         self,
@@ -660,6 +773,9 @@ class PhotoWorkflow:
                 len(final_jpgs)
             )
             for jpg_path in final_jpgs:
+                if reporter.is_cancelled():
+                    reporter.log("warning", "Sync cancelled — stopping before build/deploy")
+                    return stats
                 metadata = MetadataExtractor.extract_metadata(jpg_path)
                 all_metadata.append(metadata)
                 if metadata.get('rating', 0) >= 4:
@@ -705,6 +821,9 @@ class PhotoWorkflow:
                     total_to_process
                 )
                 for img_path in images_to_copy:
+                    if reporter.is_cancelled():
+                        reporter.log("warning", "Sync cancelled — stopping before build/deploy")
+                        return stats
                     if not dry_run:
                         dst_path = gallery_images_path / img_path.name
                         copy_ok, copy_err = FileManager.safe_copy(img_path, dst_path)
@@ -774,20 +893,60 @@ class PhotoWorkflow:
                 else:
                     env = None
 
-                subprocess.run(
+                # npm build: Popen + cancel-poll (mirrors the rclone backup pattern).
+                # Only dist/ is affected — Final and Staging are untouched by the build.
+                build_proc = subprocess.Popen(
                     ["npm", "run", "build"],
                     cwd=photo_gallery_path,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    check=True,
-                    env=env
+                    bufsize=1,
+                    env=env,
                 )
+                build_output: list = []
+                build_cancelled = False
+                for line in iter(build_proc.stdout.readline, ''):
+                    if reporter.is_cancelled():
+                        build_cancelled = True
+                        reporter.log("warning", "Build cancelled — terminating npm...")
+                        build_proc.terminate()
+                        try:
+                            build_proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            build_proc.kill()
+                        break
+                    stripped = line.rstrip()
+                    if stripped:
+                        build_output.append(stripped)
+                if not build_cancelled:
+                    build_proc.wait()
+
+                if build_cancelled:
+                    reporter.log("warning", "Sync-gallery cancelled during build — dist/ may be incomplete; Final untouched")
+                    stats['build_successful'] = False
+                    stats['sync_successful'] = False
+                    return stats
+
+                if build_proc.returncode != 0:
+                    err_detail = "; ".join(build_output[-5:])
+                    reporter.log("error", f"npm build failed (exit {build_proc.returncode}): {err_detail}")
+                    reporter.event("phase", {"name": "build_or_sync", "status": "failed"})
+                    logger.error("npm build failed (exit %d): %s", build_proc.returncode, err_detail)
+                    stats['errors'] += 1
+                    stats['build_successful'] = False
+                    stats['sync_successful'] = False
+                    return stats
+
                 reporter.event("phase", {"name": "build", "status": "done"})
 
                 reporter.log("info", "Syncing to remote server...")
                 reporter.event("phase", {"name": "sync", "status": "starting"})
+
+                # rsync deploy: Popen + cancel-poll (mirrors the rclone backup pattern).
                 # Tailscale already encrypts the link — drop -z, use the fast cipher.
-                subprocess.run(
+                # Only the remote gallery dist/ is affected; Final is untouched.
+                sync_proc = subprocess.Popen(
                     [
                         "rsync",
                         "-a",
@@ -796,21 +955,53 @@ class PhotoWorkflow:
                         f"{photo_gallery_path}/dist/",
                         f"{GALLERY_REMOTE_USER}@{GALLERY_REMOTE_HOST}:{GALLERY_REMOTE_PATH}/"
                     ],
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
-                    check=True
+                    bufsize=1,
                 )
-                reporter.event("phase", {"name": "sync", "status": "done"})
+                sync_output: list = []
+                sync_cancelled = False
+                for line in iter(sync_proc.stdout.readline, ''):
+                    if reporter.is_cancelled():
+                        sync_cancelled = True
+                        reporter.log("warning", "Remote sync cancelled — terminating rsync...")
+                        sync_proc.terminate()
+                        try:
+                            sync_proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            sync_proc.kill()
+                        break
+                    stripped = line.rstrip()
+                    if stripped:
+                        sync_output.append(stripped)
+                if not sync_cancelled:
+                    sync_proc.wait()
 
+                if sync_cancelled:
+                    reporter.log("warning", "Sync-gallery cancelled during remote deploy — local build complete; Final untouched")
+                    stats['build_successful'] = True
+                    stats['sync_successful'] = False
+                    return stats
+
+                if sync_proc.returncode != 0:
+                    err_detail = "; ".join(sync_output[-5:])
+                    reporter.log("error", f"rsync failed (exit {sync_proc.returncode}): {err_detail}")
+                    reporter.event("phase", {"name": "build_or_sync", "status": "failed"})
+                    logger.error("rsync to gallery remote failed (exit %d)", sync_proc.returncode)
+                    stats['errors'] += 1
+                    stats['build_successful'] = True
+                    stats['sync_successful'] = False
+                    return stats
+
+                reporter.event("phase", {"name": "sync", "status": "done"})
                 stats['build_successful'] = True
                 stats['sync_successful'] = True
 
-            except subprocess.CalledProcessError as e:
-                reporter.log("error", f"Build/sync failed: {e.stderr if e.stderr else str(e)}")
+            except Exception as e:
+                reporter.log("error", f"Build/sync failed: {e}")
                 reporter.event("phase", {"name": "build_or_sync", "status": "failed"})
-                logger.error(f"Error during build or sync: {e}")
-                logger.error(f"Command output: {e.stdout}")
-                logger.error(f"Command error: {e.stderr}")
+                logger.error("Error during build or sync: %s", e)
                 stats['errors'] += 1
                 stats['build_successful'] = False
                 stats['sync_successful'] = False
@@ -854,6 +1045,7 @@ class PhotoWorkflow:
         )
 
         if stats['sync_successful'] and not dry_run:
+            self._prune_remote_trash(HOMELAB_SSD_TRASH_PATH, reporter=reporter)
             reporter.log("info", "Triggering Immich library scan...")
             immich_success, immich_msg = trigger_immich_scan()
             stats['immich_scan_triggered'] = immich_success
@@ -934,9 +1126,19 @@ class PhotoWorkflow:
             },
         }
 
+        # Always probe reachability (cheap TCP connect) so the connection indicator is
+        # correct on the fast path too — without it, `_connection` was only set when
+        # check_remote=True (a full SSH round-trip per source), so the default poll always
+        # reported "unreachable" even with Tailscale up.
+        result['_connection'] = self._check_homelab_reachable()
+
         if check_remote:
             connection_method = None
             for key, info in result.items():
+                # Skip meta keys (e.g. '_connection', set above to a str/None) — only the
+                # per-source dicts have remote_path/extension. Iterating them would throw.
+                if key.startswith('_') or not isinstance(info, dict):
+                    continue
                 remote_count, method = self._get_remote_file_count(
                     info['remote_path'],
                     info['extension']
@@ -946,9 +1148,24 @@ class PhotoWorkflow:
                 if remote_count >= 0:
                     connection_method = method
 
-            result['_connection'] = connection_method
+            # The SSH probe is authoritative when it succeeds; otherwise keep the TCP result.
+            if connection_method:
+                result['_connection'] = connection_method
 
         return result
+
+    def _check_homelab_reachable(self) -> Optional[str]:
+        """Fast reachability check: TCP connect to the homelab SSH port over Tailscale.
+
+        Returns "tailscale" if the port accepts a connection within the timeout, else None.
+        Far cheaper than a full SSH session — used to drive the connection indicator on
+        the hot availability poll.
+        """
+        try:
+            with socket.create_connection((HOMELAB_HOST, 22), timeout=2):
+                return "tailscale"
+        except OSError:
+            return None
 
     def _run_backup_rclone(
         self,
@@ -1098,8 +1315,23 @@ class PhotoWorkflow:
                 error_lines = []
                 transfers_started = False
                 current_files = "--"  # latest file-count string for transfer events
+                cancelled = False
 
+                # rclone -v --stats=1s emits a stats line every second, so this blocking
+                # readline returns at least once per second — fast enough to honour a
+                # cancel within ~1-2s. Backup is read-only on the source, so terminating
+                # rclone mid-transfer is safe (no partial files reach the source).
                 for line in iter(proc.stdout.readline, ''):
+                    if reporter.is_cancelled():
+                        cancelled = True
+                        reporter.log("warning", f"Cancelling {source_name} backup — terminating rclone...")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        break
+
                     if not line:
                         break
 
@@ -1136,6 +1368,11 @@ class PhotoWorkflow:
 
                 proc.wait()
 
+            if cancelled:
+                stats['cancelled'] = True
+                reporter.log("warning", f"{source_name.title()} backup cancelled — source files untouched")
+                return stats
+
             if proc.returncode == 0:
                 stats['sync_successful'] = True
                 stats['connection_method'] = 'tailscale'
@@ -1152,6 +1389,80 @@ class PhotoWorkflow:
             reporter.log("error", f"Backup failed: {e}")
 
         return stats
+
+    # Trash folder name produced by --backup-dir: e.g. "raws_2026-06-30_18-21".
+    # The timestamp is when the backup ran (= when files were MOVED to trash), which is the
+    # correct retention clock — NOT the files' own mtime (rclone preserves each RAW's original
+    # capture-time mtime, so a fresh trash of months-old photos would be wrongly aged out).
+    _TRASH_FOLDER_RE = re.compile(r'_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2})/?$')
+
+    def _prune_remote_trash(
+        self,
+        trash_base: Path,
+        retention_days: int = 30,
+        reporter: Optional[ProgressReporter] = None,
+    ) -> None:
+        """
+        Delete homelab trash folders that were created more than retention_days ago. Best-effort.
+
+        rclone --backup-dir parks each backup's deleted/replaced files in a timestamped
+        `{source}_{ts}` folder under the trash base; nothing else prunes them, so they grow
+        unbounded (RAW culls alone can be tens of GB per run). After a successful backup we
+        delete whole folders whose *trash timestamp* (parsed from the folder name) is older than
+        retention_days — so every trashed file sits for the full window regardless of its
+        shooting/mtime. This trash is only a short-term oops-recovery net: the offsite restic
+        snapshots already keep point-in-time RAW history, and the trash base is excluded from
+        restic. Never raises — a prune failure must not fail the backup.
+
+        Pruning the whole base (not just this source's prefix) also clears legacy folders from
+        other sources that share the same disk (e.g. old `final_*` dirs on the RAWs HDD).
+        """
+        if reporter is None:
+            reporter = RichReporter()
+
+        remote_base = f':sftp,host="{HOMELAB_HOST}",user="{HOMELAB_USER}",ciphers="{RCLONE_SSH_CIPHER}":'
+        trash_remote = remote_base + str(trash_base)
+        env = os.environ.copy()
+        op_agent = os.path.expanduser(
+            "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+        )
+        if os.path.exists(op_agent):
+            env["SSH_AUTH_SOCK"] = op_agent
+
+        try:
+            listing = subprocess.run(
+                ["rclone", "lsf", "--dirs-only", "--sftp-key-use-agent", trash_remote],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            if listing.returncode != 0:
+                reporter.log("warning", f"Trash prune skipped (list failed: rclone exit {listing.returncode})")
+                return
+
+            cutoff = datetime.now() - timedelta(days=retention_days)
+            pruned = 0
+            for raw_name in listing.stdout.splitlines():
+                name = raw_name.strip().rstrip('/')
+                match = self._TRASH_FOLDER_RE.search(name)
+                if not match:
+                    continue  # unrecognised name → never delete it
+                try:
+                    trashed_at = datetime.strptime(match.group(1), "%Y-%m-%d_%H-%M")
+                except ValueError:
+                    continue
+                if trashed_at >= cutoff:
+                    continue  # still within the retention window
+                purge = subprocess.run(
+                    ["rclone", "purge", "--sftp-key-use-agent", f"{trash_remote}/{name}"],
+                    capture_output=True, text=True, timeout=180, env=env,
+                )
+                if purge.returncode == 0:
+                    pruned += 1
+                else:
+                    reporter.log("warning", f"Failed to prune trash {name} (rclone exit {purge.returncode})")
+            if pruned:
+                reporter.log("info", f"Pruned {pruned} homelab trash folder(s) older than {retention_days}d ({trash_base})")
+        except Exception as e:
+            reporter.log("warning", f"Trash prune skipped: {e}")
 
     def backup_raws_to_homelab(
         self,
@@ -1178,7 +1489,7 @@ class PhotoWorkflow:
             reporter.log("error", "External SSD must be connected for RAWs backup")
             return {'source': 'raws', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
-        return self._run_backup_rclone(
+        stats = self._run_backup_rclone(
             source_path=RAWS_PATH,
             remote_dest=HOMELAB_HDD_RAWS_PATH,
             source_name='raws',
@@ -1187,6 +1498,9 @@ class PhotoWorkflow:
             file_pattern='*.RAF',
             reporter=reporter,
         )
+        if stats.get('sync_successful') and not dry_run:
+            self._prune_remote_trash(HOMELAB_HDD_TRASH_PATH, reporter=reporter)
+        return stats
 
     def backup_videos_to_homelab(
         self,
@@ -1213,7 +1527,7 @@ class PhotoWorkflow:
             reporter.log("error", "External SSD must be connected for Videos backup")
             return {'source': 'videos', 'scanned': 0, 'sync_successful': False, 'errors': 1}
 
-        return self._run_backup_rclone(
+        stats = self._run_backup_rclone(
             source_path=SSD_PATH,
             remote_dest=HOMELAB_HDD_VIDEOS_PATH,
             source_name='videos',
@@ -1222,3 +1536,6 @@ class PhotoWorkflow:
             file_pattern='*.MOV',
             reporter=reporter,
         )
+        if stats.get('sync_successful') and not dry_run:
+            self._prune_remote_trash(HOMELAB_HDD_TRASH_PATH, reporter=reporter)
+        return stats

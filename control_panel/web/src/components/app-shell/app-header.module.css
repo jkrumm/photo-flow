@@ -38,6 +38,28 @@
   flex-shrink: 0;
 }
 
+/* Job progress pill — visible on every route while a job is running. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--vx-surface-border);
+  background: var(--vx-surface-elevated);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vx-neutral);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.pill:hover {
+  opacity: 0.8;
+}
+
 @media (max-width: 47.99em) {
   .bar {
     flex-wrap: wrap;

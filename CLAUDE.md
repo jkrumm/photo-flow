@@ -57,6 +57,11 @@ is_already_renamed(filename: str) -> bool
 extract_original_base(filename: str) -> str
   # "2026-01-28_10-29-15_DSCF0430.JPG" → "DSCF0430"
 
+correlation_base(filename: str) -> str
+  # Like extract_original_base, but also strips Photomator's duplicate suffix (_2, _3, …):
+  # "2026-03-03_17-36-33_DSCF0770_2.jpg" → "DSCF0770"
+  # USE THIS for JPG↔RAW orphan matching — a mismatch deletes an irreplaceable RAW.
+
 get_timestamp_from_exif(file_path: Path) -> Optional[datetime]
   # Uses exiftool -DateTimeOriginal (reliable, survives edits)
 
@@ -139,7 +144,7 @@ control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7717
 
 **Serving:** `photoflow serve` runs uvicorn; FastAPI mounts the built SPA at `/` with a catch-all
 SPA fallback after all `/api`-prefixed routes are registered. Dev: Vite on port 7718 proxies
-`/health`, `/status`, `/ops`, `/jobs`, `/events`, `/analytics`, `/index`, `/backup` to 7717.
+`/health`, `/status`, `/ops`, `/jobs`, `/events`, `/analytics`, `/index`, `/backup`, `/gallery` to 7717.
 
 ---
 
@@ -331,7 +336,9 @@ StatusReport:
    - **Output**: Progress bar for move operations
 2. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
    - **Output**: Info messages for each deletion
-3. **Cleanup orphaned RAWs**: Local RAFs without matching Final JPG
+3. **Cleanup orphaned RAWs**: Local RAFs whose base matches no JPG in **Final OR Staging**
+   (`compute_raw_keep_bases`, Photomator-suffix tolerant). Staging is included so RAWs for
+   photos still awaiting finalize are never deleted.
    - **Output**: Info messages for cleanup operations
 
 **Returns:**
@@ -349,9 +356,11 @@ StatusReport:
 
 #### `cleanup_unused_raws(dry_run=False, progress_callback=None) -> Dict[str, int]`
 **Process:**
-1. Scan Final folder for JPGs (DSCF*.JPG)
-2. Find corresponding RAWs in RAWs folder (same DSCF number)
-3. Identify orphaned RAWs (no matching Final JPG)
+1. Build the keep-set: bases of every JPG in **Final AND Staging** (`compute_raw_keep_bases`,
+   Photomator-suffix tolerant via `correlation_base`)
+2. Scan RAWs folder for RAFs
+3. Identify orphaned RAWs (base matches no Final/Staging JPG). **Including Staging is critical** —
+   a RAW whose JPG is still awaiting finalize is NOT an orphan; deleting it is irreversible loss.
 4. **Always preview first** (shows list)
 5. **Confirmation required** (unless dry-run)
 6. Delete orphaned RAWs
@@ -1008,13 +1017,54 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.0
+**Version**: 0.4.2
 **Last Updated**: June 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.2 - Backup Hardening: Cancel + Trash Retention + needs_sync Fix (June 2026)
+Three fixes to the rclone backup path (`workflow.py`):
+
+1. **Cancellable backups**: the rclone streaming loop (`_run_backup_rclone`) now polls
+   `reporter.is_cancelled()` each iteration (rclone `--stats=1s` → ~1-2s response), sends SIGTERM,
+   escalates to SIGKILL after 10s, and reports `cancelled` (not `failed`). Previously the loop
+   ignored the cancel flag and ran rclone to completion — the panel's Stop button did nothing.
+2. **30-day trash retention** (`_prune_remote_trash`): rclone `--backup-dir` parks deleted/replaced
+   files in timestamped `{source}_{ts}` trash folders that accumulated unbounded (was 59 GB). After
+   a successful backup, the public `backup_*_to_homelab` methods prune trash folders older than 30
+   days. **Retention keys off the folder-name timestamp (when trashed), NOT file mtime** — rclone
+   preserves each RAW's original capture-time mtime, so an mtime sweep would delete a freshly-trashed
+   folder of months-old photos immediately. HDD-trash prune (raws/videos) also clears legacy
+   `final_*` folders that predate the SSD-trash split. Trash is excluded from the offsite restic→B2
+   backup (mount-level + `**/.trash/**`), so it never leaves the homelab.
+3. **`needs_sync` 500 fix**: `get_backup_availability(check_remote=True)` iterated the `_connection`
+   meta key as if it were a source dict → 500, so the panel's per-source "Synced / N behind" badges
+   were stuck on "No data". The loop now skips non-source keys. Frontend `availabilityRemote()` query
+   polls `check_remote=true` on a slow (3-min) interval to drive the badges.
+4. **"Up to date" UI on the pipeline edges**: backup & sync-gallery edge buttons now show a
+   `Synced` / `N behind|pending` badge and disable when there's nothing to sync. Backup uses
+   `needs_sync` (sum over final/raws/videos). Gallery uses a new cheap endpoint
+   `GET /gallery/status` → `get_gallery_sync_status()`: set-diff of rating≥4 Final filenames (index)
+   vs the `GALLERY_PATH/images` folder (`{target, current, pending, up_to_date}`) — catches swaps,
+   no hashing/build. It relies on index freshness and does not detect in-place re-edits of an
+   already-published photo (that still needs a full sync-gallery run).
+
+### v0.4.1 - RAW Orphan Detection: Staging-Aware + Photomator-Tolerant (June 2026)
+**Fixed two data-loss bugs in RAW orphan cleanup** (`finalize_staging` step 4 and `cleanup_unused_raws`):
+
+1. **Staging was ignored**: orphans were computed against **Final only**. A RAW whose JPG was still
+   in Staging (imported, not yet finalized/rated) counted as orphaned and would be deleted — destroying
+   the RAW backup of a photo about to be kept. Audited on the live library: **566 RAWs** were exposed.
+2. **Photomator duplicate suffix broke correlation**: a Photomator export `DSCF0770_2.jpg` extracts to
+   base `DSCF0770_2`, which never matches RAW `DSCF0770.RAF`. **3 keepers' RAWs** were exposed.
+
+**Fix:** new `compute_raw_keep_bases()` (workflow.py) builds the keep-set from **Final ∪ Staging**, and
+new `correlation_base()` (timestamp_renamer.py) strips the trailing `_<digits>` Photomator marker. Both
+orphan call sites now use them. Strictly safer — the fix never deletes a RAW the old logic kept
+(validated: 569 RAWs newly protected, 0 newly orphaned).
 
 ### v0.4.0 - Control Panel (June 2026)
 **Added a local-only always-on web control panel at `http://localhost:7717`:**

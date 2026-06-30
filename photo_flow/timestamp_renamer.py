@@ -18,6 +18,12 @@ from typing import Optional, Set
 # Matches: YYYY-MM-DD_HH-MM-SS_ with optional counter suffix before underscore
 TIMESTAMP_PREFIX_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(-\d+)?_')
 
+# Photomator appends a duplicate marker (_2, _3, …) when it exports/duplicates an
+# image, e.g. DSCF0770_2.jpg. Fuji X-T4 base names never contain an underscore, so a
+# trailing _<digits> is always a Photomator artifact and must be stripped to correlate
+# the JPG back to its DSCF RAW.
+PHOTOMATOR_SUFFIX_PATTERN = re.compile(r'_\d+$')
+
 
 def is_already_renamed(filename: str) -> bool:
     """
@@ -72,6 +78,26 @@ def extract_original_base(filename: str) -> str:
 
     # No timestamp prefix, just return the stem
     return stem
+
+
+def correlation_base(filename: str) -> str:
+    """
+    Base used to correlate a JPG to its RAW, tolerant of Photomator duplicate suffixes.
+
+    Like extract_original_base, but also strips a trailing Photomator duplicate marker
+    (_2, _3, …) so a Photomator export such as DSCF0770_2.jpg correlates to DSCF0770.RAF.
+    Use this (not extract_original_base) anywhere a JPG must be matched to its RAW for
+    orphan detection — a mismatch here deletes an irreplaceable RAW.
+
+    Examples:
+        >>> correlation_base("2026-03-03_17-36-33_DSCF0770_2.jpg")
+        'DSCF0770'
+        >>> correlation_base("2026-01-28_10-29-15_DSCF0430.JPG")
+        'DSCF0430'
+        >>> correlation_base("DSCF0430.RAF")
+        'DSCF0430'
+    """
+    return PHOTOMATOR_SUFFIX_PATTERN.sub("", extract_original_base(filename))
 
 
 def get_timestamp_from_exif(file_path: Path) -> Optional[datetime]:

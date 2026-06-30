@@ -12,7 +12,6 @@ import {
   IconChartHistogram,
   IconHeartbeat,
   IconMenu2,
-  IconPlayerPlay,
 } from '@tabler/icons-react'
 import type { MouseEvent } from 'react'
 import { AppSidebar, type SidebarSection } from '../components/app-shell/app-sidebar'
@@ -20,6 +19,9 @@ import { MobileNav } from '../components/app-shell/app-mobile-nav'
 import { AppBreadcrumbs } from '../components/app-shell/app-breadcrumbs'
 import { GlobalActions } from '../components/app-shell/global-actions'
 import { PageActionsOutlet, PageHeaderProvider } from '../components/app-shell/page-header'
+import { JobController } from '../components/app-shell/job-controller'
+import { JobProgressPill } from '../components/app-shell/job-progress-pill'
+import { NotificationSettings } from '../components/app-shell/notification-settings'
 import { useUiStore } from '../lib/store'
 import classes from '../components/app-shell/app-header.module.css'
 
@@ -38,8 +40,10 @@ function RootLayout() {
 
   useHotkeys([['mod+B', toggleSidebar]])
 
-  const isPipelineActive = !!matchRoute({ to: '/pipeline', fuzzy: true }) || !!matchRoute({ to: '/', fuzzy: false })
-  const isOperationsActive = !!matchRoute({ to: '/operations', fuzzy: true })
+  const isPipelineActive =
+    !!matchRoute({ to: '/pipeline', fuzzy: true }) ||
+    !!matchRoute({ to: '/operations', fuzzy: true }) ||
+    !!matchRoute({ to: '/', fuzzy: false })
   const isAnalyticsActive = !!matchRoute({ to: '/analytics', fuzzy: true })
   const isLibraryActive = !!matchRoute({ to: '/library', fuzzy: true })
 
@@ -62,16 +66,6 @@ function RootLayout() {
           href: '/pipeline',
           active: isPipelineActive,
           onClick: go(() => void navigate({ to: '/pipeline' })),
-        },
-        {
-          key: 'operations',
-          label: 'Operations',
-          short: 'Ops',
-          mobile: true,
-          icon: <IconPlayerPlay size={ICON} />,
-          href: '/operations',
-          active: isOperationsActive,
-          onClick: go(() => void navigate({ to: '/operations' })),
         },
       ],
     },
@@ -123,6 +117,7 @@ function RootLayout() {
 
   return (
     <PageHeaderProvider>
+      <JobController />
       <AppShell
         h="100dvh"
         layout="alt"
@@ -142,6 +137,8 @@ function RootLayout() {
             </div>
             <PageActionsOutlet className={classes.pageActions} />
             <Divider orientation="vertical" visibleFrom="sm" style={{ height: 24 }} />
+            <JobProgressPill />
+            <NotificationSettings />
             <GlobalActions className={classes.global} />
           </div>
         </AppShell.Header>

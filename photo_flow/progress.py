@@ -28,6 +28,7 @@ class ProgressReporter(Protocol):
     def advance(self, n: int = 1) -> None: ...
     def log(self, level: str, message: str) -> None: ...
     def event(self, type: str, payload: dict) -> None: ...
+    def is_cancelled(self) -> bool: ...
     def __enter__(self) -> ProgressReporter: ...
     def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
 
@@ -71,6 +72,9 @@ class RichReporter:
     def event(self, type: str, payload: dict) -> None:
         pass  # no-op for Rich; QueueReporter (Group 3) pushes onto the SSE queue
 
+    def is_cancelled(self) -> bool:
+        return False  # CLI cancellation is Ctrl+C, not cooperative
+
     def __del__(self) -> None:
         # Safety net for standalone usage that forgets to close.
         if self._progress is not None:
@@ -94,6 +98,9 @@ class NullReporter:
 
     def event(self, type: str, payload: dict) -> None:
         pass
+
+    def is_cancelled(self) -> bool:
+        return False
 
     def __enter__(self) -> NullReporter:
         return self

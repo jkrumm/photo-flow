@@ -1,40 +1,35 @@
-import { Button, Group, Modal, Stack, Table, Text } from '@mantine/core'
-import { IconAlertTriangle } from '@tabler/icons-react'
+import { useState, useEffect } from 'react'
+import { Button, Checkbox, Group, Modal, Stack, Table, Text } from '@mantine/core'
+import { IconAlertTriangle, IconTrash } from '@tabler/icons-react'
 import type { ActiveOp } from '../../lib/store'
+import { FIELD_LABELS } from '../../lib/op-metadata'
 
-// ── Preview formatting ────────────────────────────────────────────────────────
-
-const FIELD_LABELS: Record<string, string> = {
-  photos: 'Photos',
-  raws: 'RAWs',
-  videos: 'Videos',
-  skipped: 'Skipped (duplicates)',
-  errors: 'Errors',
-  moved: 'Photos to move',
-  edits_moved: 'Sidecars to move',
-  orphaned_raws: 'Orphaned RAWs',
-  deleted_raws: 'RAWs to delete',
-  deleted_camera_raws: 'Camera RAWs to delete',
-  orphaned: 'Orphaned RAWs',
-  deleted: 'To delete',
-  scanned: 'Files scanned',
-  synced: 'Photos to sync',
-  removed: 'Photos to remove',
-  unchanged: 'Unchanged',
-  total_in_gallery: 'Total in gallery',
-  json_updated: 'Metadata JSON updated',
-  build_successful: 'Build successful',
-  sync_successful: 'Sync successful',
-  source: 'Source',
-  sources: 'Sources',
-  total_scanned: 'Total files scanned',
-  all_successful: 'All successful',
-  connection_method: 'Connection',
-  immich_scan_triggered: 'Immich scan triggered',
-  trash_path: 'Trash path',
-}
+// ── Preview field classification ──────────────────────────────────────────────
 
 const SKIP_FIELDS = new Set(['remote_path', 'path'])
+
+/**
+ * Fields whose non-zero value represents a permanent, irreversible local file
+ * deletion. These get a distinct visual treatment (red/warn + trash icon) and
+ * require an explicit confirmation gesture before the Confirm button enables.
+ */
+const PERMANENT_DELETE_FIELDS = new Set([
+  'orphaned_raws',       // finalize: orphaned RAWs identified for deletion
+  'deleted_raws',        // finalize: local RAWs deleted
+  'deleted_camera_raws', // finalize: camera RAWs deleted
+  'deleted',             // cleanup: RAWs deleted
+  'orphaned',            // cleanup: RAWs queued for deletion (dry-run count)
+])
+
+function hasPermanentDeletions(preview: Record<string, unknown>): boolean {
+  for (const f of PERMANENT_DELETE_FIELDS) {
+    const val = preview[f]
+    if (typeof val === 'number' && val > 0) return true
+  }
+  return false
+}
+
+// ── Preview formatting ────────────────────────────────────────────────────────
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return '—'
@@ -65,12 +60,12 @@ function PreviewSummary({ opId, preview }: { opId: ActiveOp; preview: Record<str
       const orphaned = Number(p['orphaned_raws'] ?? 0)
       return (
         <Text size="sm">
-          Would move <strong>{moved}</strong> photos{edits > 0 ? ` + ${edits} sidecars` : ''} from
+          Would move <strong>{moved}</strong> photo{moved !== 1 ? 's' : ''}{edits > 0 ? ` + ${edits} sidecars` : ''} from
           Staging to Final.{' '}
           {orphaned > 0 && (
-            <>
-              Would delete <strong>{orphaned}</strong> orphaned RAWs.
-            </>
+            <span style={{ color: 'var(--vx-warnSolid)', fontWeight: 600 }}>
+              Would permanently delete {orphaned} orphaned RAW{orphaned !== 1 ? 's' : ''}.
+            </span>
           )}
         </Text>
       )
@@ -79,8 +74,8 @@ function PreviewSummary({ opId, preview }: { opId: ActiveOp; preview: Record<str
       const count = Number(p['orphaned'] ?? 0)
       return (
         <Text size="sm">
-          Would permanently delete <strong>{count}</strong> orphaned RAW{count !== 1 ? 's' : ''}.
-          This cannot be undone.
+          Would permanently delete <strong style={{ color: 'var(--vx-warnSolid)' }}>{count}</strong> orphaned
+          RAW{count !== 1 ? 's' : ''}. This cannot be undone.
         </Text>
       )
     }
@@ -120,6 +115,42 @@ function PreviewSummary({ opId, preview }: { opId: ActiveOp; preview: Record<str
   }
 }
 
+// ── Preview table row ─────────────────────────────────────────────────────────
+
+function PreviewRow({ field, value }: { field: string; value: unknown }) {
+  const isDeletion = PERMANENT_DELETE_FIELDS.has(field)
+  const numVal = typeof value === 'number' ? value : null
+  const isSignificantDeletion = isDeletion && numVal !== null && numVal > 0
+
+  return (
+    <Table.Tr>
+      <Table.Td
+        style={{
+          color: isSignificantDeletion ? 'var(--vx-warnSolid)' : 'var(--mantine-color-dimmed)',
+          width: '55%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+        }}
+      >
+        {isSignificantDeletion && (
+          <IconTrash size={12} style={{ flexShrink: 0, color: 'var(--vx-warnSolid)' }} />
+        )}
+        {FIELD_LABELS[field] ?? field}
+      </Table.Td>
+      <Table.Td
+        style={{
+          fontVariantNumeric: 'tabular-nums',
+          fontWeight: isSignificantDeletion ? 700 : 500,
+          color: isSignificantDeletion ? 'var(--vx-warnSolid)' : undefined,
+        }}
+      >
+        {isSignificantDeletion ? `−${numVal}` : formatValue(value)}
+      </Table.Td>
+    </Table.Tr>
+  )
+}
+
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 export type DryRunModalProps = {
@@ -143,6 +174,19 @@ export function DryRunModal({
   isDestructive,
   preview,
 }: DryRunModalProps) {
+  const [confirmChecked, setConfirmChecked] = useState(false)
+
+  // Reset the confirmation checkbox each time the modal opens.
+  useEffect(() => {
+    if (opened) setConfirmChecked(false)
+  }, [opened])
+
+  // Require an explicit checkbox only when the preview contains permanent deletions
+  // (orphaned RAWs, camera RAWs, etc.). Zero-deletion operations confirm in one click.
+  const needsConfirmGesture =
+    isDestructive && preview !== null && hasPermanentDeletions(preview)
+  const confirmEnabled = !needsConfirmGesture || confirmChecked
+
   return (
     <Modal
       opened={opened}
@@ -186,17 +230,20 @@ export function DryRunModal({
               {Object.entries(preview)
                 .filter(([k]) => !SKIP_FIELDS.has(k))
                 .map(([k, v]) => (
-                  <Table.Tr key={k}>
-                    <Table.Td style={{ color: 'var(--mantine-color-dimmed)', width: '55%' }}>
-                      {FIELD_LABELS[k] ?? k}
-                    </Table.Td>
-                    <Table.Td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
-                      {formatValue(v)}
-                    </Table.Td>
-                  </Table.Tr>
+                  <PreviewRow key={k} field={k} value={v} />
                 ))}
             </Table.Tbody>
           </Table>
+        )}
+
+        {needsConfirmGesture && (
+          <Checkbox
+            label="I understand these files will be permanently deleted"
+            checked={confirmChecked}
+            onChange={(e) => setConfirmChecked(e.currentTarget.checked)}
+            color="orange"
+            size="sm"
+          />
         )}
 
         <Group justify="flex-end" gap="sm" mt="xs">
@@ -207,6 +254,7 @@ export function DryRunModal({
             color={isDestructive ? 'orange' : 'blue'}
             onClick={onConfirm}
             loading={isConfirming}
+            disabled={!confirmEnabled}
           >
             {isDestructive ? 'Confirm — delete files' : 'Confirm'}
           </Button>

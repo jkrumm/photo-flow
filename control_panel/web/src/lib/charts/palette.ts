@@ -38,8 +38,8 @@ const p = (fam: readonly string[], light = 2, dark = 3): ColorPair => ({
 
 /** Photo-flow pipeline series — stage identity colors. */
 export const PHOTO = {
-  /** Camera / import — orange (warm, arrival) */
-  camera: p(BP.orange),
+  /** Camera / import — vermilion (warm arrival; kept distinct from Staging gold) */
+  camera: p(BP.vermilion),
   /** Staging — gold (pending) */
   staging: p(BP.gold),
   /** Final — blue (identity anchor, the main collection) */
