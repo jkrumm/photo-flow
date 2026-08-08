@@ -5,7 +5,7 @@ POST /ops/import         — import files from camera to staging/RAWs/SSD
 POST /ops/finalize       — move staging JPGs to Final; clean orphaned RAWs
 POST /ops/cleanup        — delete orphaned RAW files (no matching Final JPG)
 POST /ops/sync-gallery   — sync rating≥4 images to gallery + build + deploy
-POST /ops/backup         — rclone backup to homelab (source: final|raws|videos|all)
+POST /ops/backup         — rclone backup to homelab (source: final|raws|videos|staging|all)
 GET  /backup/availability — check what's available and compare with remote
 
 Confirmation flow:
@@ -124,12 +124,18 @@ class BackupSourceInfo(BaseModel):
     remote_count: Optional[int] = None
     needs_sync: Optional[int] = None
     requires: Optional[str] = None
+    optional: bool = False
+    # .photo-edit sidecars, counted separately but included in needs_sync.
+    sidecar_local_count: Optional[int] = None
+    sidecar_remote_count: Optional[int] = None
+    sidecar_needs_sync: Optional[int] = None
 
 
 class BackupAvailabilityResponse(BaseModel):
     final: BackupSourceInfo
     raws: BackupSourceInfo
     videos: BackupSourceInfo
+    staging: BackupSourceInfo
     connection: Optional[str] = None
 
 
@@ -148,7 +154,8 @@ class DestructiveJobBody(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-BackupSource = Literal["final", "raws", "videos", "all"]
+# "staging" is the opt-in safety mirror — reachable explicitly, never part of "all".
+BackupSource = Literal["final", "raws", "videos", "staging", "all"]
 
 _JOB_RESPONSES: dict = {
     202: {"model": JobEnqueued, "description": "Job enqueued"},
@@ -174,7 +181,9 @@ def _run_backup(source: BackupSource, dry_run: bool, reporter: Any) -> Dict[str,
         return _workflow.backup_raws_to_homelab(dry_run=dry_run, reporter=reporter)
     elif source == "videos":
         return _workflow.backup_videos_to_homelab(dry_run=dry_run, reporter=reporter)
-    else:  # "all"
+    elif source == "staging":
+        return _workflow.backup_staging_to_homelab(dry_run=dry_run, reporter=reporter)
+    else:  # "all" — deliberately excludes the optional staging mirror
         results = []
         for method in (
             _workflow.backup_final_to_homelab,
@@ -350,8 +359,9 @@ async def op_backup(
     """
     Backup to homelab via rclone over Tailscale.
 
-    - `source`: `final` | `raws` | `videos` | `all` (default: `all`).
-      `all` runs final → raws → videos sequentially within one job.
+    - `source`: `final` | `raws` | `videos` | `staging` | `all` (default: `all`).
+      `all` runs final → raws → videos sequentially within one job. `staging` is the
+      opt-in, trash-free safety mirror and must be requested explicitly.
     - `dry_run=true` returns a preview dict synchronously (no remote changes).
     - `dry_run=false` enqueues a background job.
     """
@@ -389,6 +399,7 @@ async def backup_availability(check_remote: bool = False) -> BackupAvailabilityR
         "final": BackupSourceInfo(**serialized.get("final", {})),
         "raws": BackupSourceInfo(**serialized.get("raws", {})),
         "videos": BackupSourceInfo(**serialized.get("videos", {})),
+        "staging": BackupSourceInfo(**serialized.get("staging", {})),
         "connection": connection,
     })
 

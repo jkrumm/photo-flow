@@ -234,6 +234,14 @@ def backup(dry_run):
                     status_lines.append(
                         f"  [green]✓[/green] {key.upper():8s} {local:,} local │ {remote:,} remote │ [green]synced[/green]"
                     )
+
+                # needs_sync already includes these; break them out so a sidecar-only
+                # change reads as an edit-history gap rather than a mystery count.
+                sidecars_behind = info_data.get('sidecar_needs_sync') or 0
+                if sidecars_behind > 0:
+                    status_lines.append(
+                        f"    {'':8s} [dim]└ {sidecars_behind:,} .photo-edit sidecar(s) pending[/dim]"
+                    )
             else:
                 status_lines.append(f"  [yellow]~[/yellow] {key.upper():8s} {local:,} files ready [dim](remote unreachable)[/dim]")
         else:
@@ -276,6 +284,10 @@ def backup(dry_run):
             requires = avail.get('requires', 'Unknown')
             label = {'final': 'JPEGs', 'raws': 'RAWs', 'videos': 'Videos'}[source]
             options.append((None, f"{label} (unavailable - {requires} not connected)"))
+
+    # Optional Staging mirror — last, and never folded into "all"
+    if availability.get('staging', {}).get('available'):
+        options.append(('staging', 'Staging mirror (optional safety copy, no trash)'))
 
     # Display menu
     console.print("\n[bold]Select what to backup:[/bold]")
@@ -326,6 +338,8 @@ def backup(dry_run):
             stats = workflow.backup_raws_to_homelab(dry_run=dry_run)
         elif source == 'videos':
             stats = workflow.backup_videos_to_homelab(dry_run=dry_run)
+        elif source == 'staging':
+            stats = workflow.backup_staging_to_homelab(dry_run=dry_run)
 
         all_stats.append(stats)
         total_errors += stats.get('errors', 0)

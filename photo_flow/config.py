@@ -25,6 +25,10 @@ HOMELAB_USER = "jkrumm"
 HOMELAB_HOST = "100.85.139.104"  # Tailscale IP
 # SSD backup path (for Final JPEGs - fast access)
 HOMELAB_SSD_FINAL_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Fuji")
+# Optional safety mirror of Staging. Deliberately a SIBLING of the Fuji folder, not inside it:
+# Immich mounts .../Bilder/Fuji read-only as an external library, and unfinalized, unrated
+# photos have no business showing up there.
+HOMELAB_SSD_STAGING_PATH = Path("/home/jkrumm/ssd/SSD/Bilder/Staging")
 # HDD backup paths (for large files - RAWs and Videos)
 HOMELAB_HDD_RAWS_PATH = Path("/mnt/hdd/fuji/RAWs")
 HOMELAB_HDD_VIDEOS_PATH = Path("/mnt/hdd/fuji/Videos")
@@ -36,7 +40,9 @@ HOMELAB_TRASH_PATH = HOMELAB_HDD_TRASH_PATH
 # Legacy alias for backwards compatibility
 HOMELAB_DEST_PATH = HOMELAB_SSD_FINAL_PATH
 # Exclude system files from backup (macOS resource forks, Windows thumbnails, etc.)
-# These files are not portable and not part of the actual photo data
+# These files are not portable and not part of the actual photo data.
+# NEVER add EDIT_SIDECAR_SUFFIX here — the .photo-edit sidecars are the only copy of
+# Photomator's re-editable edit history and must ride along to the homelab.
 RSYNC_EXCLUDE_PATTERNS = [
     ".DS_Store",      # macOS folder view settings
     "._*",            # macOS AppleDouble resource forks (extended attributes)
@@ -58,3 +64,8 @@ CLARITY_ADJUSTMENT = -3
 
 # File extensions to process
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
+
+# Photomator's re-editable edit history, stored as <jpg-stem>.photo-edit next to the JPG.
+# Irreplaceable (there is no second copy) and ~17 MB each, so it travels with its JPG
+# through finalize and is included in the Final backup.
+EDIT_SIDECAR_SUFFIX = '.photo-edit'

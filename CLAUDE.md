@@ -18,6 +18,8 @@ Personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging wor
 | Import RAWs | Camera/*.RAF | RAWS_PATH (SSD) | ✅ Yes | ✅ Yes | System files |
 | Finalize | STAGING/*.JPG (+ .photo-edit) | FINAL_PATH (move, full quality) | ✅ Yes | ✅ Yes | None |
 | Gallery Sync | FINAL/*.JPG (rating ≥ 4) | GALLERY_PATH/images | ❌ No | ✅ Yes | Rating-based |
+| Backup (final) | FINAL/* (JPG + .photo-edit) | homelab SSD (rclone, 30d trash) | ❌ No | rclone | System files |
+| Backup (staging, opt-in) | STAGING/* (JPG + .photo-edit) | homelab SSD (rclone, **no trash**) | ❌ No | rclone | System files |
 | Migrate | Any folder | Same folder (rename in-place) | ✅ Yes (atomic) | ✅ Yes | Already renamed |
 
 ---
@@ -324,19 +326,27 @@ StatusReport:
 ```
 
 #### `finalize_staging(dry_run=False, progress_callback=None) -> Dict[str, int]`
-**Process (3 steps with separate Rich Progress bars):**
+**Process (4 steps with separate Rich Progress bars):**
 1. **Atomic Move (full quality, no re-compression)**: For each Staging JPG (one at a time):
    - Copy Staging JPG → Final byte-for-byte (safe_copy with hash verify) — **no re-encoding**
    - Move the matching `.photo-edit` sidecar (Photomator edit history) alongside its JPG, if present
+   - **Duplicate JPGs still hand over their sidecar**: when the JPG is already in Final and the
+     hash matches, the JPG is skipped but the sidecar is moved anyway — skipping it strands the
+     edit history in Staging forever
    - Delete from Staging (only after the verified copy)
    - **Interrupt-safe**: Remaining files stay in Staging, retry processes them
    - **Why no compression**: Photomator bakes its edits and embeds the star rating into the
      JPG itself, so the Staging JPG is already the finished full-quality master. The web
      gallery downscales on demand (Astro + sharp), so Final never needs to be small.
    - **Output**: Progress bar for move operations
-2. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
+2. **Sidecar reconciliation** (`_reconcile_staging_sidecars`, "Step 1b"): the loop above iterates
+   JPGs, so a sidecar whose JPG already left Staging (interrupted earlier run) is unreachable by
+   it. This sweep moves such a sidecar to Final if its JPG is there, and **leaves + warns** if the
+   JPG exists nowhere — irreplaceable history is never auto-deleted. `._*` AppleDouble forks are
+   ignored. Runs on the "no photos in staging" early return too, and is skipped when cancelled.
+3. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
    - **Output**: Info messages for each deletion
-3. **Cleanup orphaned RAWs**: Local RAFs whose base matches no JPG in **Final OR Staging**
+4. **Cleanup orphaned RAWs**: Local RAFs whose base matches no JPG in **Final OR Staging**
    (`compute_raw_keep_bases`, Photomator-suffix tolerant). Staging is included so RAWs for
    photos still awaiting finalize are never deleted.
    - **Output**: Info messages for cleanup operations
@@ -558,7 +568,10 @@ def photoflow()
 ```python
 1. safe_copy(staging_file → Final) with hash verify   # byte-for-byte, no re-encode
 2. If a matching <stem>.photo-edit sidecar exists: safe_copy it → Final, then delete it from Staging
+   (_move_sidecar — same verified copy-then-delete contract; also runs on the duplicate-skip path)
 3. Delete staging JPG (only after step 1 verified)
+
+After the loop: _reconcile_staging_sidecars() sweeps sidecars the JPG-driven loop cannot reach.
 ```
 
 **Architecture guarantees:**
@@ -566,7 +579,9 @@ def photoflow()
 - ✅ **Interrupt-safe**: Ctrl+C at any point leaves consistent state
 - ✅ **Idempotent**: Re-running processes remaining Staging files
 - ✅ **No quality loss**: Final JPGs are byte-identical to the Photomator-edited masters
-- ✅ **Edit history preserved**: `.photo-edit` sidecars travel with their JPG (re-editable in Photomator)
+- ✅ **Edit history preserved**: `.photo-edit` sidecars travel with their JPG (re-editable in
+  Photomator), on every path — normal move, duplicate skip, and the post-loop sweep. A sidecar is
+  never deleted by photo-flow; the only copy of an edit history has no second source.
 - ✅ **Retry-friendly**: Failed files stay in Staging for next run
 
 **Why no compression (changed in v0.3.4):**
@@ -1017,13 +1032,58 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.2
-**Last Updated**: June 2026
+**Version**: 0.4.3
+**Last Updated**: August 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.3 - Sidecar Integrity: Stranded `.photo-edit` Recovery + Sidecar-Aware Freshness (August 2026)
+The `.photo-edit` sidecar is the **only** copy of Photomator's re-editable edit history — no
+second copy exists anywhere. Three gaps closed, plus one opt-in addition:
+
+1. **Two ways a sidecar got stranded in Staging** (`finalize_staging`):
+   - The **duplicate-skip path** (`final_path.exists()` + hash match) `continue`d *before* the
+     sidecar block, so a JPG already in Final left its sidecar behind permanently.
+   - The main loop **iterates JPGs**, so a sidecar whose JPG left Staging in an earlier
+     interrupted run (JPG copied + deleted, sidecar copy failed) was never visited again.
+
+   **Fix:** the dup-skip branch now carries the sidecar over before skipping, and a new
+   **Step 1b** `_reconcile_staging_sidecars()` sweeps Staging for sidecars with no JPG beside
+   them — moving them if their JPG is in Final, **leaving and reporting** them otherwise (never
+   deleting: it is irreplaceable history). The sweep also runs on the "no photos in staging"
+   early return, which would otherwise skip it. Shared `_move_sidecar()` keeps the
+   verified-copy-then-delete contract identical to a JPG's.
+2. **Backup badge no longer lies about edit history** (`get_backup_availability`): counts were
+   `*.JPG`-only on both sides, so re-editing an already-backed-up photo in Photomator (which
+   changes *only* the sidecar) left the panel reading "Synced" while the homelab held stale
+   history. `final` and `staging` now also carry `sidecar_extension` / `sidecar_local_count` /
+   `sidecar_remote_count` / `sidecar_needs_sync`, and **`needs_sync` includes the sidecar gap**
+   (so `PipelineHero`'s edge button and the CLI panel become sidecar-aware for free). The
+   Library card and the CLI status panel break the sidecar count out separately, since "3 behind"
+   with zero new photos otherwise reads as a glitch.
+   Sidecars were already *backed up* correctly — `_run_backup_rclone` syncs the whole Final dir
+   and `RSYNC_EXCLUDE_PATTERNS` never listed them; `config.py` now says so explicitly so nobody
+   "tidies up" by excluding them.
+3. **Optional Staging mirror** (`backup_staging_to_homelab`, source `staging`): Staging is the
+   one stage with no second copy — between import and finalize a JPG and its ~17 MB sidecar
+   live on the laptop disk alone. Deliberately unlike the other three sources:
+   - **No trash** (new `use_trash=False` on `_run_backup_rclone`, which omits `--backup-dir`).
+     The mirror is transient; once finalize moves a photo into Final (which *is* trash-backed)
+     the staging copy should vanish, not accumulate for 30 days.
+   - **No `min_files` floor** — an empty Staging is the normal end state, not a red flag.
+   - **Not part of `all`** — opt-in only, via the CLI menu's last entry or
+     `POST /ops/backup?source=staging`.
+   - Remote path `HOMELAB_SSD_STAGING_PATH` is a **sibling** of the Fuji folder, not inside it:
+     Immich mounts `…/Bilder/Fuji` as an external library and unfinalized, unrated photos have
+     no business appearing there.
+
+**Tests:** `tests/test_finalize_sidecars.py` (7 cases: travels-with-JPG, duplicate skip, stranded
+sweep with and without other staging JPGs, no-owner left alone, AppleDouble `._*` ignored,
+dry-run counts only) and `tests/test_backup_availability.py` (7 cases: split local counts,
+sidecar-only gap marks stale, gaps add up, non-sidecar sources untouched, unreachable → -1).
 
 ### v0.4.2 - Backup Hardening: Cancel + Trash Retention + needs_sync Fix (June 2026)
 Three fixes to the rclone backup path (`workflow.py`):

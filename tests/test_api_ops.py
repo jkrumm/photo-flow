@@ -100,7 +100,12 @@ def _make_mock_workflow(**overrides) -> MagicMock:
     mock.backup_videos_to_homelab.return_value = _BACKUP_VIDEOS_RESULT
     mock.get_backup_availability.return_value = {
         "final": {"available": True, "local_count": 500, "path": Path("/tmp/final"),
-                  "remote_path": Path("/remote/final"), "extension": "*.JPG"},
+                  "remote_path": Path("/remote/final"), "extension": "*.JPG",
+                  "sidecar_extension": "*.photo-edit", "sidecar_local_count": 12},
+        "staging": {"available": True, "local_count": 7, "path": Path("/tmp/staging"),
+                    "remote_path": Path("/remote/staging"), "extension": "*.JPG",
+                    "sidecar_extension": "*.photo-edit", "sidecar_local_count": 2,
+                    "optional": True},
         "raws": {"available": False, "local_count": 0, "path": Path("/tmp/raws"),
                  "remote_path": Path("/remote/raws"), "extension": "*.RAF",
                  "requires": "External SSD"},
@@ -338,8 +343,11 @@ class TestBackupAvailability:
         assert "final" in data
         assert "raws" in data
         assert "videos" in data
+        assert "staging" in data
         assert data["final"]["available"] is True
         assert data["final"]["local_count"] == 500
+        assert data["final"]["sidecar_local_count"] == 12
+        assert data["staging"]["optional"] is True
 
     def test_paths_serialized_as_strings(self, monkeypatch):
         """Path objects in availability dict must be serialized to strings."""

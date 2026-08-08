@@ -184,6 +184,9 @@ function BackupSourceCard({
 
   const statusColor = isFresh ? VX.good : isStale ? VX.warn : VX.neutral
   const statusLabel = isFresh ? 'Synced' : isStale ? `${needsSync} behind` : 'No data'
+  // Folded into needs_sync above, but shown separately: a re-edit in Photomator touches
+  // only the sidecar, so "3 behind" with 0 new photos would otherwise read as a glitch.
+  const sidecarsBehind = info.sidecar_needs_sync ?? 0
 
   return (
     <Card withBorder padding="md" style={{ borderColor: VX.surface.border }}>
@@ -236,6 +239,14 @@ function BackupSourceCard({
           </Group>
         )}
 
+        {info.available && info.sidecar_local_count !== null && (
+          <Text size="xs" style={{ color: sidecarsBehind > 0 ? VX.warn : undefined }} c={sidecarsBehind > 0 ? undefined : 'dimmed'}>
+            {info.sidecar_local_count.toLocaleString()} edit sidecar
+            {info.sidecar_local_count === 1 ? '' : 's'}
+            {sidecarsBehind > 0 ? ` · ${sidecarsBehind.toLocaleString()} pending` : ''}
+          </Text>
+        )}
+
         {info.requires && (
           <Text size="xs" c="dimmed">
             Requires: {info.requires}
@@ -252,8 +263,8 @@ function BackupSection() {
 
   if (isLoading) {
     return (
-      <SimpleGrid cols={{ base: 1, sm: 3 }}>
-        {[0, 1, 2].map((i) => (
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+        {[0, 1, 2, 3].map((i) => (
           <Skeleton key={i} h={120} radius="md" />
         ))}
       </SimpleGrid>
@@ -296,10 +307,11 @@ function BackupSection() {
         </Button>
       </Group>
 
-      <SimpleGrid cols={{ base: 1, sm: 3 }}>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
         <BackupSourceCard label="Final" info={data.final} color={VX.photo.final} />
         <BackupSourceCard label="RAWs" info={data.raws} color={VX.photo.raws} />
         <BackupSourceCard label="Videos" info={data.videos} color={VX.photo.videos} />
+        <BackupSourceCard label="Staging (optional)" info={data.staging} color={VX.photo.staging} />
       </SimpleGrid>
 
       {!connectionOk && (

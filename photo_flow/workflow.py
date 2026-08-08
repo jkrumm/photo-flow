@@ -19,7 +19,8 @@ from photo_flow.config import (
     GALLERY_REMOTE_USER, GALLERY_REMOTE_HOST, GALLERY_REMOTE_PATH,
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
     HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_HDD_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
-    RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS
+    RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS,
+    HOMELAB_SSD_STAGING_PATH, EDIT_SIDECAR_SUFFIX
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.metadata_extractor import MetadataExtractor
@@ -387,6 +388,87 @@ class PhotoWorkflow:
             'errors': errors
         }
 
+    def _move_sidecar(
+        self,
+        src: Path,
+        dst: Path,
+        stats: Dict[str, int],
+        reporter: ProgressReporter,
+    ) -> bool:
+        """
+        Move one .photo-edit sidecar with the same verified copy-then-delete contract as a JPG.
+
+        The sidecar is the only copy of Photomator's edit history, so the source is deleted
+        only after safe_copy has hash-verified the destination.
+
+        Args:
+            src: Sidecar in Staging
+            dst: Destination path in Final
+            stats: Finalize stats dict, mutated in place ('edits_moved' / 'errors')
+            reporter: Progress reporter for error logging
+
+        Returns:
+            True if the sidecar now lives at dst and is gone from Staging
+        """
+        copied, copy_error = self.file_manager.safe_copy(src, dst)
+        if not copied:
+            reporter.log("error", f"Failed to copy sidecar {src.name} to Final: {copy_error}")
+            stats['errors'] += 1
+            return False
+
+        try:
+            src.unlink()
+        except Exception as e:
+            reporter.log("error", f"Failed to delete staging sidecar {src.name}: {e}")
+            stats['errors'] += 1
+            return False
+
+        stats['edits_moved'] += 1
+        return True
+
+    def _reconcile_staging_sidecars(
+        self,
+        dry_run: bool,
+        stats: Dict[str, int],
+        reporter: ProgressReporter,
+    ) -> None:
+        """
+        Move sidecars whose JPG has already left Staging.
+
+        Finalize's main loop iterates JPGs, so a sidecar stranded by an earlier interrupted run
+        (JPG copied and deleted, sidecar not yet moved) would never be visited again and its
+        edit history would sit in Staging forever. This sweep catches those.
+
+        A sidecar with no JPG in Staging *or* Final is left untouched and reported — it is
+        irreplaceable history and deleting it is not this function's call.
+        """
+        candidates = [
+            s for s in sorted(STAGING_PATH.glob(f'*{EDIT_SIDECAR_SUFFIX}'))
+            if not s.name.startswith('._')
+        ]
+        if not candidates:
+            return
+
+        staging_stems = {p.stem for p in scan_for_images(STAGING_PATH, '.JPG')}
+        stranded = [s for s in candidates if s.stem not in staging_stems]
+        if not stranded:
+            return
+
+        final_stems = {p.stem for p in scan_for_images(FINAL_PATH, '.JPG')}
+        for sidecar in stranded:
+            if sidecar.stem not in final_stems:
+                reporter.log(
+                    "warning",
+                    f"Sidecar {sidecar.name} has no JPG in Staging or Final — left in place",
+                )
+                continue
+
+            if dry_run:
+                stats['edits_moved'] += 1
+                continue
+
+            self._move_sidecar(sidecar, FINAL_PATH / sidecar.name, stats, reporter)
+
     def finalize_staging(
         self,
         dry_run: bool = False,
@@ -426,6 +508,8 @@ class PhotoWorkflow:
 
         if len(staging_files) == 0:
             reporter.log("info", "No photos in staging to finalize")
+            # Still sweep: Staging can hold a stranded sidecar with no JPG left beside it.
+            self._reconcile_staging_sidecars(dry_run, stats, reporter)
             return stats
 
         # Create final directory if it doesn't exist
@@ -450,7 +534,7 @@ class PhotoWorkflow:
                     break
 
                 final_path = FINAL_PATH / staging_file.name
-                sidecar_src = staging_file.with_suffix('.photo-edit')
+                sidecar_src = staging_file.with_suffix(EDIT_SIDECAR_SUFFIX)
                 sidecar_dst = FINAL_PATH / sidecar_src.name
                 has_sidecar = sidecar_src.exists()
 
@@ -458,6 +542,13 @@ class PhotoWorkflow:
                 if final_path.exists():
                     is_dup, _ = self.file_manager.is_duplicate(staging_file, final_path)
                     if is_dup:
+                        # The JPG is already in Final, but its sidecar may not be — carry it
+                        # over before skipping, or the edit history stays stranded in Staging.
+                        if has_sidecar:
+                            if dry_run:
+                                stats['edits_moved'] += 1
+                            else:
+                                self._move_sidecar(sidecar_src, sidecar_dst, stats, reporter)
                         stats['skipped'] += 1
                         reporter.event("file_done", {"filename": staging_file.name, "action": "skipped"})
                         reporter.advance()
@@ -482,17 +573,7 @@ class PhotoWorkflow:
 
                     # Move the .photo-edit sidecar alongside its JPG (hash-verified copy).
                     if has_sidecar:
-                        sc_success, sc_error = self.file_manager.safe_copy(sidecar_src, sidecar_dst)
-                        if sc_success:
-                            try:
-                                sidecar_src.unlink()
-                                stats['edits_moved'] += 1
-                            except Exception as e:
-                                reporter.log("error", f"Failed to delete staging sidecar {sidecar_src.name}: {e}")
-                                stats['errors'] += 1
-                        else:
-                            reporter.log("error", f"Failed to copy sidecar {sidecar_src.name} to Final: {sc_error}")
-                            stats['errors'] += 1
+                        self._move_sidecar(sidecar_src, sidecar_dst, stats, reporter)
 
                     # Remove the staging JPG only after its own verified copy succeeded.
                     try:
@@ -505,6 +586,10 @@ class PhotoWorkflow:
                     reporter.event("file_done", {"filename": staging_file.name, "action": "moved"})
 
                 reporter.advance()
+
+        # Step 1b: catch sidecars the JPG-driven loop above can never reach.
+        if not reporter.is_cancelled():
+            self._reconcile_staging_sidecars(dry_run, stats, reporter)
 
         # Cancel gate: if Step 1 was interrupted, skip all RAW-deletion steps so a
         # cancelled/watchdog-timed-out finalize never deletes RAWs it didn't finish reviewing.
@@ -1100,6 +1185,7 @@ class PhotoWorkflow:
                 ...
             }
         """
+        sidecar_glob = f'*{EDIT_SIDECAR_SUFFIX}'
         result = {
             'final': {
                 'available': FINAL_PATH.exists(),
@@ -1107,6 +1193,21 @@ class PhotoWorkflow:
                 'remote_path': HOMELAB_SSD_FINAL_PATH,
                 'local_count': len(list(FINAL_PATH.glob('*.JPG'))) if FINAL_PATH.exists() else 0,
                 'extension': '*.JPG',
+                # Sidecars are backed up with the JPGs but counted separately: re-editing a
+                # published photo in Photomator changes only the sidecar, which a JPG-only
+                # count reports as "Synced" while the homelab still holds stale edit history.
+                'sidecar_extension': sidecar_glob,
+                'sidecar_local_count': len(list(FINAL_PATH.glob(sidecar_glob))) if FINAL_PATH.exists() else 0,
+            },
+            'staging': {
+                'available': STAGING_PATH.exists(),
+                'path': STAGING_PATH,
+                'remote_path': HOMELAB_SSD_STAGING_PATH,
+                'local_count': len(list(STAGING_PATH.glob('*.JPG'))) if STAGING_PATH.exists() else 0,
+                'extension': '*.JPG',
+                'sidecar_extension': sidecar_glob,
+                'sidecar_local_count': len(list(STAGING_PATH.glob(sidecar_glob))) if STAGING_PATH.exists() else 0,
+                'optional': True,
             },
             'raws': {
                 'available': RAWS_PATH.exists(),
@@ -1148,6 +1249,23 @@ class PhotoWorkflow:
                 if remote_count >= 0:
                     connection_method = method
 
+                # Sidecars ride along in the same rclone sync, so they belong in needs_sync —
+                # otherwise a sidecar-only change leaves the badge claiming "Synced".
+                if 'sidecar_extension' not in info:
+                    continue
+                sc_remote, sc_method = self._get_remote_file_count(
+                    info['remote_path'],
+                    info['sidecar_extension']
+                )
+                info['sidecar_remote_count'] = sc_remote
+                if sc_remote >= 0:
+                    info['sidecar_needs_sync'] = max(0, info['sidecar_local_count'] - sc_remote)
+                    connection_method = sc_method
+                    if info['needs_sync'] >= 0:
+                        info['needs_sync'] += info['sidecar_needs_sync']
+                else:
+                    info['sidecar_needs_sync'] = -1
+
             # The SSH probe is authoritative when it succeeds; otherwise keep the TCP result.
             if connection_method:
                 result['_connection'] = connection_method
@@ -1176,6 +1294,7 @@ class PhotoWorkflow:
         min_files: int = 0,
         file_pattern: str = '*',
         trash_base_path: Path = None,
+        use_trash: bool = True,
         reporter: Optional[ProgressReporter] = None,
     ) -> Dict[str, any]:
         """
@@ -1193,6 +1312,10 @@ class PhotoWorkflow:
             dry_run: If True, simulate only
             min_files: Minimum files required (safety check)
             file_pattern: Glob pattern to count files
+            trash_base_path: Base folder for the timestamped trash dir (ignored if use_trash=False)
+            use_trash: If False, run a plain mirror with no --backup-dir. Only for transient
+                sources like Staging, where the remote copy is meant to disappear once the
+                files move on and 30-day trash retention would just hoard them.
             reporter: Progress reporter; defaults to RichReporter (identical CLI output).
 
         Returns:
@@ -1236,23 +1359,25 @@ class PhotoWorkflow:
             stats['errors'] += 1
             return stats
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        base = trash_base_path if trash_base_path is not None else HOMELAB_TRASH_PATH
-        trash_folder = f"{base}/{source_name}_{timestamp}"
-        stats['trash_path'] = trash_folder
-
         # rclone on-the-fly SFTP remote (no config file needed)
         remote_base = f':sftp,host="{HOMELAB_HOST}",user="{HOMELAB_USER}",ciphers="{RCLONE_SSH_CIPHER}":'
         dst = remote_base + str(remote_dest)
-        trash_remote = remote_base + trash_folder
         src = str(source_path) + "/"  # trailing slash = sync contents
+
+        trash_args: List[str] = []
+        if use_trash:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+            base = trash_base_path if trash_base_path is not None else HOMELAB_TRASH_PATH
+            trash_folder = f"{base}/{source_name}_{timestamp}"
+            stats['trash_path'] = trash_folder
+            trash_args = ["--backup-dir", remote_base + trash_folder]
 
         cmd = [
             "rclone", "sync",
             "--sftp-key-use-agent",  # Use SSH_AUTH_SOCK (1Password agent). Must come before src/dst.
             f"--transfers={RCLONE_TRANSFERS}",
             f"--sftp-concurrency={RCLONE_SFTP_CONCURRENCY}",
-            "--backup-dir", trash_remote,
+            *trash_args,
             "-v",          # Required: without -v, rclone emits no stats to the pipe
             "--stats=1s",
             "--retries", "3",
@@ -1463,6 +1588,49 @@ class PhotoWorkflow:
                 reporter.log("info", f"Pruned {pruned} homelab trash folder(s) older than {retention_days}d ({trash_base})")
         except Exception as e:
             reporter.log("warning", f"Trash prune skipped: {e}")
+
+    def backup_staging_to_homelab(
+        self,
+        dry_run: bool = False,
+        reporter: Optional[ProgressReporter] = None,
+        progress_callback=None,
+    ) -> Dict[str, any]:
+        """
+        Optional safety mirror of Staging (JPGs + their .photo-edit sidecars) to the homelab SSD.
+
+        Staging is the one stage with no second copy: between import and finalize, a JPG and its
+        ~17 MB edit history live on the laptop disk alone. This mirrors them so a disk failure
+        mid-cull is survivable.
+
+        Deliberately different from the other three sources:
+        - **No trash** (`use_trash=False`). The mirror is transient by design — once finalize
+          moves a photo into Final (which *is* trash-backed), the staging copy should vanish
+          rather than pile up in a 30-day trash folder.
+        - **No min_files floor.** An empty Staging is the normal end state, not a red flag, so
+          syncing it down to empty is correct rather than something to abort on.
+        - **Not part of `all`.** It is opt-in; the canonical backup set stays final/raws/videos.
+
+        Args:
+            dry_run: If True, simulate only
+            reporter: Progress reporter; defaults to RichReporter (identical CLI output).
+            progress_callback: Ignored — kept for call-site compatibility.
+
+        Returns:
+            Dict with backup stats
+        """
+        if reporter is None:
+            reporter = RichReporter()
+
+        return self._run_backup_rclone(
+            source_path=STAGING_PATH,
+            remote_dest=HOMELAB_SSD_STAGING_PATH,
+            source_name='staging',
+            dry_run=dry_run,
+            min_files=0,
+            file_pattern='*.JPG',
+            use_trash=False,
+            reporter=reporter,
+        )
 
     def backup_raws_to_homelab(
         self,

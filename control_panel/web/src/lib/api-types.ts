@@ -154,16 +154,22 @@ export type BackupSourceInfo = {
   remote_count: number | null
   needs_sync: number | null
   requires: string | null
+  optional: boolean
+  /** .photo-edit sidecars — counted separately, but folded into needs_sync. */
+  sidecar_local_count: number | null
+  sidecar_remote_count: number | null
+  sidecar_needs_sync: number | null
 }
 
 export type BackupAvailabilityResponse = {
   final: BackupSourceInfo
   raws: BackupSourceInfo
   videos: BackupSourceInfo
+  staging: BackupSourceInfo
   connection: string | null
 }
 
-export type BackupSource = 'final' | 'raws' | 'videos' | 'all'
+export type BackupSource = 'final' | 'raws' | 'videos' | 'staging' | 'all'
 
 // ── Gallery ───────────────────────────────────────────────────────────────────
 

@@ -170,12 +170,14 @@ photoflow sync-gallery
 ```
 
 ### `photoflow backup`
-Backup the Final folder to your homelab via rsync:
+Backup to your homelab over Tailscale, with an interactive source picker:
 - **Tailscale connectivity**: Connects via encrypted mesh network (no port exposure needed)
+- **Sources**: `Final` (JPGs + their `.photo-edit` edit history), `RAWs`, `Videos` — or all three
 - **Smart filtering**: Excludes system files (`.DS_Store`, `._*`, `Thumbs.db`, etc.) - only backs up your photos
-- Syncs the contents of Final/ to the remote directory
-- Uses rsync for safe, interruptible transfers (--partial)
-- Keeps remote in sync (uses --delete)
+- **Trash, not deletion**: replaced/removed files are parked in a timestamped trash folder for 30 days
+- **Optional Staging mirror**: a fourth, opt-in source that mirrors Staging (JPGs + sidecars) so
+  work-in-progress survives a disk failure between import and finalize. No trash — the mirror is
+  transient and empties itself once you finalize. Never included in "all"; pick it explicitly.
 
 Add `--dry-run` to preview without sending data.
 
