@@ -5,10 +5,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from photo_flow.api.jobs import JobManager
+from photo_flow.api.jobs import JobManager, sweep_interrupted_jobs
 from photo_flow.api.routes_analytics import router as analytics_router
 from photo_flow.api.routes_jobs import router as jobs_router
 from photo_flow.api.routes_ops import router as ops_router
+from photo_flow.api.routes_photos import router as photos_router
 from photo_flow.api.routes_status import router as status_router
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,11 @@ _DIST_PATH = Path(__file__).parent.parent.parent / "control_panel" / "web" / "di
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before anything can be enqueued: reconcile jobs the previous process was still
+    # running when it died. A fresh manager owns nothing, so anything left `queued` or
+    # `running` in the durable record is residue of a crash / logout / `make reload`,
+    # and is marked `interrupted` rather than silently disappearing.
+    app.state.interrupted_jobs = sweep_interrupted_jobs()
     app.state.job_manager = JobManager()
     yield
 
@@ -38,6 +44,9 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(ops_router)
     app.include_router(analytics_router)
+    # Culling view. Its routes sit under /api/photos so the SPA can own the
+    # client-side /photos route without the catch-all below shadowing the API.
+    app.include_router(photos_router)
 
     # Serve the built SPA. This catch-all is registered after all API routes so those
     # match first. Any path that doesn't match an API route falls through to here:

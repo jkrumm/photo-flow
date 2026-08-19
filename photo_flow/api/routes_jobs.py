@@ -4,6 +4,9 @@ Job status and SSE streaming endpoints.
 GET  /jobs              — list of queued + running + recent terminal jobs
 GET  /jobs/active       — currently running job (or null), for reload re-attach
 GET  /jobs/stream       — SSE of manager-level lifecycle events (job_queued, job_started, …)
+GET  /jobs/history      — DURABLE job records (survive a restart); ?unannounced=true
+                          narrows to terminal jobs the UI has not yet surfaced
+POST /jobs/history/ack  — flag records as surfaced, so each job notifies exactly once
 GET  /jobs/{job_id}     — current job state (status, result, error)
 POST /jobs/{job_id}/cancel — request cooperative cancellation (running or queued)
 POST /jobs/{job_id}/move   — move a queued job one slot {up|down}
@@ -18,6 +21,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+
+from photo_flow.api import job_store
 
 router = APIRouter()
 
@@ -71,6 +76,35 @@ async def stream_manager(request: Request) -> EventSourceResponse:
             mgr.unsubscribe_manager(q)
 
     return EventSourceResponse(generator())
+
+
+@router.get("/jobs/history")
+async def list_history(limit: int = 50, unannounced: bool = False) -> dict:
+    """Durable job records, newest first — the ones that survive a restart.
+
+    Unlike `GET /jobs` (which reads the in-memory manager and is emptied by every
+    restart), this reads the `jobs` table. `unannounced=true` narrows to terminal
+    records the UI has not yet surfaced: that is what lets a job which finished
+    while the panel was closed still produce exactly one notification when it opens.
+    """
+    limit = max(1, min(limit, 200))
+    jobs = await asyncio.to_thread(job_store.list_history, limit, unannounced)
+    return {"jobs": jobs}
+
+
+class AckBody(BaseModel):
+    job_ids: list[str]
+
+
+@router.post("/jobs/history/ack")
+async def ack_history(body: AckBody) -> dict:
+    """Mark records as surfaced by the UI so they never notify twice.
+
+    Called both by the catch-up sweep on panel load and by the live completion seam,
+    so a job watched in real time is not re-announced on the next reload.
+    """
+    updated = await asyncio.to_thread(job_store.mark_announced, body.job_ids)
+    return {"acknowledged": updated}
 
 
 @router.get("/jobs/{job_id}")

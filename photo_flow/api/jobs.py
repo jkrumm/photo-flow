@@ -17,6 +17,15 @@ Concurrency model:
   new destructive count is LARGER than what the user approved, the job is parked in
   `needs_confirm` status and the manager emits a `job_needs_confirm` event so the UI
   can ask the user to re-confirm with the updated numbers.
+
+Durability
+----------
+`_jobs` is in-memory and dies with the process. Every state transition is mirrored to
+the `jobs` table via `job_store` (see that module) so a restart leaves a record instead
+of a hole, and `sweep_interrupted_jobs()` — called once from the app's lifespan — marks
+whatever was still in flight as `interrupted`. Those mirror writes are best-effort by
+construction: the durable record is a convenience, the file operations underneath are
+not, and a database problem must never be able to stall or fail a running job.
 """
 from __future__ import annotations
 
@@ -32,6 +41,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from rich.text import Text
+
+from photo_flow.api import job_store
 
 _log = logging.getLogger(__name__)
 
@@ -62,32 +73,73 @@ def _last_run_key(op: str) -> str:
     return op
 
 
-def _persist_last_run(job: "Job") -> None:
-    """Atomically record this job's terminal state in ~/.photoflow/last_run.json.
+def _write_last_run(op: str, entry: dict) -> None:
+    """Atomically merge one op's terminal entry into ~/.photoflow/last_run.json.
 
     Best-effort: any failure is logged at DEBUG level and swallowed so it never
     breaks the job or the queue.  Uses temp-file + os.replace for atomicity.
     """
     try:
-        key = _last_run_key(job.op)
         data: dict = {}
         try:
             data = json.loads(_LAST_RUN_PATH.read_text())
         except Exception:
             pass  # Missing or malformed — start fresh
-        entry: dict = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "ok": job.status == "done",
-        }
-        if job.result is not None:
-            entry["counts"] = job.result
-        data[key] = entry
+        data[_last_run_key(op)] = entry
         _LAST_RUN_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _LAST_RUN_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, default=str))
         os.replace(str(tmp), str(_LAST_RUN_PATH))
     except Exception as exc:
-        _log.debug("_persist_last_run: write skipped (%s)", exc)
+        _log.debug("_write_last_run: write skipped (%s)", exc)
+
+
+def _persist_last_run(job: "Job") -> None:
+    """Record this job's terminal state in ~/.photoflow/last_run.json."""
+    entry: dict = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "ok": job.status == "done",
+    }
+    if job.result is not None:
+        entry["counts"] = job.result
+    _write_last_run(job.op, entry)
+
+
+def sweep_interrupted_jobs() -> list:
+    """Mark jobs orphaned by a dead process and correct their last-run entries.
+
+    Called once from the app's lifespan, before the manager accepts anything new.
+    Two halves:
+
+    1. `job_store.reconcile_interrupted()` flips every surviving `queued`/`running`
+       row to `interrupted`, so the panel shows what happened instead of nothing.
+    2. For the ones that were actually **running**, `last_run.json` is corrected to
+       `ok: false, interrupted: true`. Without this the file still holds whatever the
+       previous successful run wrote, and the pipeline advisor reads a job that died
+       80 % through a 22 GB backup as "backed up 3 days ago, fine". A job that was
+       only ever *queued* is deliberately left alone — nothing ran, so nothing about
+       the last run changed.
+
+    Returns the reconciled records (possibly empty). Never raises.
+    """
+    records = job_store.reconcile_interrupted()
+    for record in records:
+        if not record.get("was_running"):
+            continue
+        _write_last_run(
+            str(record.get("op", "")),
+            {
+                "ts": record.get("finished_at"),
+                "ok": False,
+                "interrupted": True,
+            },
+        )
+    if records:
+        _log.warning(
+            "Startup: marked %d job(s) as interrupted (server stopped mid-flight)",
+            len(records),
+        )
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +231,9 @@ class Job:
         self.op = op
         self.seq = seq
         # Status machine: queued → running → done | failed | cancelled | needs_confirm
+        # ('interrupted' is a seventh status, but it exists only in the persisted
+        # record — a live Job object cannot reach it, since it is assigned by the
+        # startup sweep to rows whose process no longer exists.)
         self.status: str = "queued"
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
@@ -350,6 +405,7 @@ class JobManager:
         self._jobs[job_id] = job
         self._queued_ids.append(job_id)
         job.position = len(self._queued_ids) - 1
+        job_store.record_queued(job_id, op_name, self._seq)
 
         queue = self._get_queue()
         queue.put_nowait(job)
@@ -390,6 +446,7 @@ class JobManager:
             return True
         if job.status == "needs_confirm":
             job.status = "cancelled"
+            job_store.record_terminal(job_id, "cancelled", error="cancelled")
             self._notify_manager(
                 {"type": "job_finished", "job_id": job_id, "op": job.op, "status": "cancelled"}
             )
@@ -533,6 +590,7 @@ class JobManager:
                 if job.status not in ("done", "failed", "cancelled", "needs_confirm"):
                     job.status = "failed"
                     job.error = f"Internal worker error: {exc}"
+                    job_store.record_terminal(job.job_id, "failed", error=job.error)
                     job._enqueue({"type": "done", "result": None, "error": job.error})
                 if self._current is job:
                     self._current = None
@@ -547,6 +605,7 @@ class JobManager:
         # Guard: job was cancelled while waiting in the queue.
         if job.cancel_event.is_set():
             job.status = "cancelled"
+            job_store.record_terminal(job.job_id, "cancelled", error="cancelled")
             job._enqueue({"type": "done", "result": None, "error": "cancelled"})
             self._notify_manager(
                 {"type": "job_finished", "job_id": job.job_id, "op": job.op, "status": "cancelled"}
@@ -571,6 +630,9 @@ class JobManager:
             if needs_reconfirm:
                 job.status = "needs_confirm"
                 job.fresh_preview = fresh
+                job_store.record_terminal(
+                    job.job_id, "needs_confirm", error="needs_confirm"
+                )
                 job._enqueue({"type": "done", "result": None, "error": "needs_confirm"})
                 self._notify_manager(
                     {
@@ -592,6 +654,7 @@ class JobManager:
 
         self._current = job
         job.status = "running"
+        job_store.record_started(job.job_id)
         loop = asyncio.get_running_loop()
         reporter = QueueReporter(job, loop)
         self._notify_manager(
@@ -629,6 +692,7 @@ class JobManager:
                 pass
             # Persist terminal state atomically — best-effort, never breaks the queue.
             _persist_last_run(job)
+            job_store.record_terminal(job.job_id, job.status, job.result, job.error)
             job._enqueue(done_event)
             self._current = None
             self._notify_manager(
