@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { Stack, Text, Title } from '@mantine/core'
+import { Group, Stack, Text, Title } from '@mantine/core'
 import { IconCamera } from '@tabler/icons-react'
 import { useCallback } from 'react'
 import { PipelineHero } from '../components/pipeline/PipelineHero'
+import { JobHistoryPanel } from '../components/operations/JobHistoryPanel'
 import type { ActiveOp } from '../lib/store'
 
 // ── Search params ─────────────────────────────────────────────────────────────
@@ -45,10 +46,10 @@ function PipelinePage() {
   return (
     <Stack gap="md">
       <Stack gap={4}>
-        <Title order={2} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Group gap={8} wrap="nowrap">
           <IconCamera size={24} />
-          Pipeline
-        </Title>
+          <Title order={2}>Pipeline</Title>
+        </Group>
         <Text c="dimmed" size="sm">
           Camera → Staging → Final → Publish — live counts; click any transition to run it
         </Text>
@@ -57,6 +58,8 @@ function PipelinePage() {
         {...(initialAction !== undefined ? { initialAction } : {})}
         onConsumeAction={onConsumeAction}
       />
+      {/* The durable record — unlike the queue above, it survives a server restart. */}
+      <JobHistoryPanel />
     </Stack>
   )
 }

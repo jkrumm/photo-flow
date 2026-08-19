@@ -82,19 +82,21 @@ function reducer(state: JobEventsState, action: Action): JobEventsState {
     }
     case 'file_done':
       return { ...state, lastFileDone: str(e['filename']) ?? null }
-    case 'transfer':
+    case 'transfer': {
+      const pct = num(e['pct'])
+      const speed = str(e['speed'])
+      const eta = str(e['eta'])
+      const files = typeof e['files'] === 'number' ? e['files'] : str(e['files'])
       return {
         ...state,
         lastTransfer: {
-          pct: num(e['pct']),
-          speed: str(e['speed']),
-          eta: str(e['eta']),
-          files:
-            typeof e['files'] === 'number'
-              ? e['files']
-              : str(e['files']),
+          ...(pct !== undefined && { pct }),
+          ...(speed !== undefined && { speed }),
+          ...(eta !== undefined && { eta }),
+          ...(files !== undefined && { files }),
         },
       }
+    }
     default:
       return state
   }

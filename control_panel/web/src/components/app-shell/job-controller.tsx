@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useActiveJobStore, useJobLiveStore, useUiStore } from '../../lib/store'
-import { jobsQueries } from '../../lib/queries/jobs'
+import { isSoundEnabled, useActiveJobStore, useJobLiveStore } from '../../lib/store'
+import { jobsQueries, jobsApi } from '../../lib/queries/jobs'
 import type { ActiveOp } from '../../lib/store'
 import { playSuccess, playError } from '../../lib/sound'
-import { notifyJobDone } from '../../lib/notify'
+import { notifyJobDone, notifyJobCatchUp } from '../../lib/notify'
 
 type RawSseEvent = Record<string, unknown> & { type: string }
 type ManagerEvent = { type: string; job_id?: string; op?: string; status?: string }
@@ -28,6 +28,12 @@ type ManagerEvent = { type: string; job_id?: string; op?: string; status?: strin
  * Live-session guard: tracks which job IDs we've seen as active in this session.
  * Replayed `done` events for jobs that finished before this mount are silently
  * dropped (no chime/notification); a genuinely observed completion does chime.
+ *
+ * Catch-up sweep: the two streams above only cover jobs finishing while the panel is
+ * open. Jobs run server-side in an always-on daemon, so anything that completed with
+ * the panel shut left no toast and no bell entry. On mount this reads the durable
+ * record's unannounced terminal jobs, replays them into the notification history, and
+ * acknowledges them so they never repeat.
  */
 export function JobController(): null {
   const queryClient = useQueryClient()
@@ -44,6 +50,32 @@ export function JobController(): null {
     if (!a) return
     useActiveJobStore.getState().setActiveJob(a.job_id, a.op.split(':')[0] as ActiveOp)
   }, [activeJob, activeJobId])
+
+  // ── Catch-up sweep for jobs finished while the panel was shut ─────────────
+  // staleTime: Infinity on the query, plus a ref latch here, so this replays once
+  // per mount and never re-announces on a refetch or a StrictMode double-effect.
+  const { data: unannounced } = useQuery(jobsQueries.unannounced())
+  const caughtUpRef = useRef(false)
+  useEffect(() => {
+    if (caughtUpRef.current) return
+    const jobs = unannounced?.jobs
+    if (!jobs) return
+    caughtUpRef.current = true
+    if (jobs.length === 0) return
+
+    // Oldest first, so the bell reads in the order things actually happened.
+    for (const job of jobs.toReversed()) {
+      notifyJobCatchUp(job.op.split(':')[0] as ActiveOp, job.status, job.result, job.error)
+    }
+    // Acknowledge regardless of what the emits did — a failed ack would replay the
+    // whole batch on the next load, which is worse than losing one bell entry.
+    void jobsApi
+      .ack(jobs.map((j) => j.job_id))
+      .catch(() => undefined)
+      .finally(() => {
+        void queryClient.invalidateQueries({ queryKey: ['jobs', 'history'] })
+      })
+  }, [unannounced, queryClient])
 
   // ── Live-session guard ────────────────────────────────────────────────────
   // A Set of job IDs observed as activeJobId !== null in this browser session.
@@ -123,7 +155,7 @@ export function JobController(): null {
 
           // 2. Sound + OS notification — only for completions observed live.
           if (activeOp !== null && seenJobIdsRef.current.has(capturedJobId)) {
-            if (useUiStore.getState().soundEnabled) {
+            if (isSoundEnabled()) {
               if (live.error !== null) playError()
               else playSuccess()
             }
@@ -131,7 +163,11 @@ export function JobController(): null {
           }
           seenJobIdsRef.current.delete(capturedJobId)
 
-          // 3. Clear + invalidate caches.
+          // 3. Acknowledge the durable record — we have just surfaced this outcome,
+          //    so the catch-up sweep must not announce it again on the next reload.
+          void jobsApi.ack([capturedJobId]).catch(() => undefined)
+
+          // 4. Clear + invalidate caches.
           clearActiveJob()
           // Zero out the active-job cache immediately so the re-attach effect
           // can't resurrect the just-finished job from a stale poll response.
@@ -141,6 +177,7 @@ export function JobController(): null {
           void queryClient.invalidateQueries({ queryKey: ['status'] })
           void queryClient.invalidateQueries({ queryKey: ['analytics', 'summary'] })
           void queryClient.invalidateQueries({ queryKey: ['backup', 'availability'] })
+          void queryClient.invalidateQueries({ queryKey: ['jobs', 'history'] })
         }
       } catch {
         // ignore malformed SSE frames

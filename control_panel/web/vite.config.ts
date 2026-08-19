@@ -1,61 +1,55 @@
-import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import babel from 'vite-plugin-babel'
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
-import { VitePWA } from 'vite-plugin-pwa'
-import { resolve } from 'path'
+import { basaltAppPlugin, basaltViteConfig } from 'basalt-ui/vite'
+import { defineConfig } from 'vite'
+import babel from 'vite-plugin-babel'
 
 const apiTarget = process.env['VITE_API_TARGET'] ?? 'http://127.0.0.1:7717'
 
+/**
+ * The FastAPI server mounts most of its routes at the bare prefixes below (not under a single
+ * `/api`), so the preset's one-target `apiTarget` proxy can't express it — we override
+ * `server.proxy`. `/api` is the newer, correctly-namespaced lane (photos): it must stay distinct
+ * from the SPA's own `/photos` route, which is NOT proxied and falls through to the dev server.
+ */
+const API_PREFIXES = [
+  '/api',
+  '/health',
+  '/status',
+  '/ops',
+  '/jobs',
+  '/events',
+  '/analytics',
+  '/index',
+  '/backup',
+  '/gallery',
+]
+
+const base = basaltViteConfig({ port: 7718, allowedHosts: ['photoflow.test'] })
+
 export default defineConfig({
+  ...base,
+  server: {
+    ...base.server,
+    proxy: Object.fromEntries(
+      API_PREFIXES.map((p) => [p, { target: apiTarget, changeOrigin: true }]),
+    ),
+  },
   plugins: [
     TanStackRouterVite({ target: 'react', autoCodeSplitting: true }),
     babel({ babelConfig: { plugins: ['babel-plugin-react-compiler'] } }),
     react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      injectRegister: 'auto',
-      manifest: false,
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api/, /^\/events/, /^\/jobs/],
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+    ...basaltAppPlugin({
+      name: 'Photo Flow',
+      shortName: 'PhotoFlow',
+      description: 'Local control panel for the Fuji X-T4 photo pipeline.',
+      serviceWorker: {
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+          navigateFallbackDenylist: [/^\/api/, /^\/events/, /^\/jobs/],
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        },
       },
-      devOptions: { enabled: false },
     }),
   ],
-  server: {
-    port: 7718,
-    strictPort: true,
-    allowedHosts: ['photoflow.test'],
-    proxy: {
-      '/health': { target: apiTarget, changeOrigin: true },
-      '/status': { target: apiTarget, changeOrigin: true },
-      '/ops': { target: apiTarget, changeOrigin: true },
-      '/jobs': { target: apiTarget, changeOrigin: true },
-      '/events': { target: apiTarget, changeOrigin: true },
-      '/analytics': { target: apiTarget, changeOrigin: true },
-      '/index': { target: apiTarget, changeOrigin: true },
-      '/backup': { target: apiTarget, changeOrigin: true },
-      '/gallery': { target: apiTarget, changeOrigin: true },
-    },
-  },
-  resolve: {
-    alias: {
-      '@pf/charts': resolve(import.meta.dirname, 'src/lib/charts'),
-    },
-    dedupe: ['react', 'react-dom', '@mantine/core', '@mantine/hooks'],
-  },
-  optimizeDeps: {
-    include: [
-      '@mantine/core',
-      '@mantine/hooks',
-      '@mantine/form',
-      '@mantine/modals',
-      '@mantine/notifications',
-    ],
-  },
 })

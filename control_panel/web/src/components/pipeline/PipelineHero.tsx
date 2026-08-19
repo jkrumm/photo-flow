@@ -1,11 +1,13 @@
 import { useRef, useState, useLayoutEffect, useCallback, useMemo, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from 'motion/react'
+import { MOTION_DURATION, MOTION_EASE_STANDARD } from 'basalt-ui'
+import { useReducedMotion } from '@mantine/hooks'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Loader, Menu, Tooltip } from '@mantine/core'
+import { Badge, Box, Flex, Group, Loader, Menu, Tooltip } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconPlayerPlayFilled, IconChevronDown } from '@tabler/icons-react'
-import { VX } from '../../lib/charts/tokens'
-import { alpha } from '../../lib/charts/utils/color'
+import { VX, alpha } from 'basalt-ui/tokens'
+import { PF } from '../../lib/series'
 import { statusQueries } from '../../lib/queries/status'
 import { analyticsQueries } from '../../lib/queries/analytics'
 import { backupQueries } from '../../lib/queries/backup'
@@ -49,11 +51,11 @@ interface EdgeOpDef {
 // and pill accents. An edge flows from STAGE_COLOR[fromId] → STAGE_COLOR[toId];
 // its pill carries the *destination* color (the action's outcome).
 const STAGE_COLOR: Record<StageId, string> = {
-  camera: VX.photo.camera,
-  staging: VX.photo.staging,
-  final: VX.photo.final,
-  homelab: VX.photo.final,
-  gallery: VX.photo.published,
+  camera: PF.camera,
+  staging: PF.staging,
+  final: PF.final,
+  homelab: PF.final,
+  gallery: PF.published,
 }
 
 // ── Edge operations (the pipeline transitions that ARE operations) ──────────────
@@ -118,18 +120,18 @@ function NodeCard({
   nodeRef,
   index,
 }: NodeCardProps) {
+  const reducedMotion = useReducedMotion()
   return (
     <motion.div
       ref={nodeRef}
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, delay: index * 0.07, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ duration: MOTION_DURATION.slow, delay: index * 0.07, ease: MOTION_EASE_STANDARD }}
       style={{
         position: 'relative',
         background: VX.surface.panel,
         border: `1px solid ${isActive ? alpha(color, 0.6) : VX.surface.border}`,
-        borderRadius: 12,
-        padding: '18px 20px',
+        borderRadius: VX.radiusCard,
         minWidth: 158,
         flex: '0 0 auto',
         boxShadow: isActive ? `0 0 0 1px ${alpha(color, 0.35)}, ${VX.shadowCard}` : VX.shadowCard,
@@ -145,17 +147,18 @@ function NodeCard({
           left: 0,
           right: 0,
           height: 3,
-          borderRadius: '12px 12px 0 0',
+          borderRadius: VX.radiusCard,
           background: color,
         }}
         animate={{ opacity: isActive ? 1 : 0.55 }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: MOTION_DURATION.slow }}
       />
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+      <Box py="md" px="lg">
+      <Group justify="space-between" align="center" mb={10} wrap="nowrap">
         <span
           style={{
-            fontSize: 11,
+            fontSize: VX.text.micro,
             fontWeight: 600,
             letterSpacing: '0.07em',
             textTransform: 'uppercase',
@@ -164,39 +167,53 @@ function NodeCard({
         >
           {label}
         </span>
-        {statusDot !== undefined && (
-          <Tooltip label={`${statusDot.label}: ${statusDot.connected ? 'connected' : 'not found'}`} withArrow>
-            <motion.div
-              aria-label={`${statusDot.label} ${statusDot.connected ? 'connected' : 'disconnected'}`}
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                background: statusDot.connected ? 'var(--vx-goodSolid)' : alpha(VX.neutral, 0.3),
-                flexShrink: 0,
-              }}
-              animate={{ scale: statusDot.connected && isActive ? [1, 1.35, 1] : 1 }}
-              transition={{ duration: 1.2, repeat: statusDot.connected && isActive ? Infinity : 0 }}
-            />
-          </Tooltip>
-        )}
-      </div>
+        {statusDot !== undefined &&
+          (reducedMotion ? (
+            <Tooltip label={`${statusDot.label}: ${statusDot.connected ? 'connected' : 'not found'}`} withArrow>
+              <div
+                aria-label={`${statusDot.label} ${statusDot.connected ? 'connected' : 'disconnected'}`}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: VX.radiusPill,
+                  background: statusDot.connected ? VX.goodSolid : alpha(VX.neutral, 0.3),
+                  flexShrink: 0,
+                }}
+              />
+            </Tooltip>
+          ) : (
+            <Tooltip label={`${statusDot.label}: ${statusDot.connected ? 'connected' : 'not found'}`} withArrow>
+              <motion.div
+                aria-label={`${statusDot.label} ${statusDot.connected ? 'connected' : 'disconnected'}`}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: VX.radiusPill,
+                  background: statusDot.connected ? VX.goodSolid : alpha(VX.neutral, 0.3),
+                  flexShrink: 0,
+                }}
+                animate={{ scale: statusDot.connected && isActive ? [1, 1.35, 1] : 1 }}
+                transition={{ duration: MOTION_DURATION.slow, repeat: statusDot.connected && isActive ? Infinity : 0 }}
+              />
+            </Tooltip>
+          ))}
+      </Group>
 
-      <div
+      <Box
+        mb={5}
         style={{
-          fontSize: 33,
+          fontSize: '2.0625rem',
           fontWeight: 700,
           lineHeight: 1,
           fontVariantNumeric: 'tabular-nums',
           color: primaryCount !== null && primaryCount !== 0 ? color : alpha(VX.neutral, 0.35),
-          marginBottom: 5,
         }}
       >
         {primaryCount ?? '–'}
-      </div>
+      </Box>
       <div
         style={{
-          fontSize: 11,
+          fontSize: VX.text.micro,
           color: alpha(VX.neutral, 0.6),
           marginBottom: secondaryCounts && secondaryCounts.length > 0 ? 8 : 0,
         }}
@@ -205,12 +222,12 @@ function NodeCard({
       </div>
 
       {secondaryCounts && secondaryCounts.length > 0 && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <Flex gap={12} wrap="wrap">
           {secondaryCounts.map(({ label: subLabel, value }) => (
-            <div key={subLabel} style={{ display: 'flex', gap: 4, alignItems: 'baseline' }}>
+            <Flex key={subLabel} gap={4} align="baseline">
               <span
                 style={{
-                  fontSize: 13,
+                  fontSize: VX.text.sm,
                   fontWeight: 600,
                   fontVariantNumeric: 'tabular-nums',
                   color: value ? alpha(color, 0.9) : alpha(VX.neutral, 0.3),
@@ -218,11 +235,12 @@ function NodeCard({
               >
                 {value ?? 0}
               </span>
-              <span style={{ fontSize: 10, color: alpha(VX.neutral, 0.5) }}>{subLabel}</span>
-            </div>
+              <span style={{ fontSize: VX.text.micro, color: alpha(VX.neutral, 0.5) }}>{subLabel}</span>
+            </Flex>
           ))}
-        </div>
+        </Flex>
       )}
+      </Box>
     </motion.div>
   )
 }
@@ -265,11 +283,11 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
       whileHover={disabled ? {} : { scale: 1.05 }}
       whileTap={disabled ? {} : { scale: 0.95 }}
       style={{
-        display: 'inline-flex',
+        display: 'inline-flex', // theme-allow: motion.button internal flex row, not a layout wrapper
         alignItems: 'center',
-        gap: 6,
-        padding: '6px 11px',
-        borderRadius: 999,
+        gap: 6, // theme-allow: motion.button, no Mantine spacing prop surface
+        padding: '6px 11px', // theme-allow: motion.button, no Mantine spacing prop surface
+        borderRadius: VX.radiusPill,
         border: `1px solid ${
           disabled
             ? VX.surface.border
@@ -286,7 +304,7 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
           ? `linear-gradient(${alpha(accent, 0.2)}, ${alpha(accent, 0.2)})`
           : 'none',
         color: disabled ? alpha(VX.neutral, 0.4) : VX.neutral,
-        fontSize: 12,
+        fontSize: VX.text.xs,
         fontWeight: 600,
         lineHeight: 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
@@ -303,22 +321,17 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
       )}
       {def.label}
       {status && (
-        <span
+        <Badge
+          size="xs"
+          ml={2}
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            padding: '1px 5px',
-            borderRadius: 999,
-            fontSize: 10,
             fontWeight: 600,
-            lineHeight: 1.4,
             background: alpha(status.tone === 'good' ? VX.good : VX.warn, 0.15),
             color: status.tone === 'good' ? VX.good : VX.warn,
-            marginLeft: 2,
           }}
         >
           {status.label}
-        </span>
+        </Badge>
       )}
       {def.op === 'backup' && <IconChevronDown size={12} style={{ opacity: 0.6 }} />}
     </motion.button>
@@ -330,11 +343,31 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
         <Menu.Target>{inner}</Menu.Target>
         <Menu.Dropdown>
           <Menu.Label>Back up source</Menu.Label>
-          {BACKUP_SOURCES.map((s) => (
-            <Menu.Item key={s.value} onClick={() => onRun(def, { source: s.value })}>
+          {BACKUP_SOURCES.filter((s) => !s.optional).map((s) => (
+            <Menu.Item
+              key={s.value}
+              onClick={() => onRun(def, { source: s.value })}
+              {...(s.hint ? { description: s.hint } : {})}
+            >
               {s.label}
             </Menu.Item>
           ))}
+          {/* Separated on purpose: the staging mirror is opt-in and never part of "all". */}
+          {BACKUP_SOURCES.some((s) => s.optional) && (
+            <>
+              <Menu.Divider />
+              <Menu.Label>Optional</Menu.Label>
+              {BACKUP_SOURCES.filter((s) => s.optional).map((s) => (
+                <Menu.Item
+                  key={s.value}
+                  onClick={() => onRun(def, { source: s.value })}
+                  {...(s.hint ? { description: s.hint } : {})}
+                >
+                  {s.label}
+                </Menu.Item>
+              ))}
+            </>
+          )}
         </Menu.Dropdown>
       </Menu>
     ) : (
@@ -343,7 +376,7 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
           disabled ? (
             <>
               {def.desc}
-              <div style={{ marginTop: 6, color: VX.warnSolid, fontWeight: 600 }}>⊘ {disabledReason}</div>
+              <Box mt={6} style={{ color: VX.warnSolid, fontWeight: 600 }}>⊘ {disabledReason}</Box>
             </>
           ) : (
             def.desc
@@ -378,26 +411,18 @@ function EdgePill({ def, mid, active, loading, disabledReason, onHover, onRun, s
 function StatusChip({ label, connected, hint }: { label: string; connected: boolean; hint?: string }) {
   return (
     <Tooltip label={hint ?? `${label}: ${connected ? 'connected' : 'not found'}`} withArrow openDelay={300}>
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 11.5,
-          color: alpha(VX.neutral, connected ? 0.75 : 0.5),
-        }}
-      >
+      <Group gap={6} wrap="nowrap" style={{ fontSize: VX.text.micro, color: alpha(VX.neutral, connected ? 0.75 : 0.5) }}>
         <span
           style={{
             width: 7,
             height: 7,
-            borderRadius: '50%',
-            background: connected ? 'var(--vx-goodSolid)' : alpha(VX.neutral, 0.3),
+            borderRadius: VX.radiusPill,
+            background: connected ? VX.goodSolid : alpha(VX.neutral, 0.3),
             flexShrink: 0,
           }}
         />
         {label}
-      </span>
+      </Group>
     </Tooltip>
   )
 }
@@ -406,10 +431,10 @@ function StatusChip({ label, connected, hint }: { label: string; connected: bool
 
 // Maps each op to its destination stage accent color (mirrors STAGE_COLOR via EDGE_OPS).
 const OP_ADVICE_ACCENT: Record<ActiveOp, string> = {
-  import: VX.photo.staging,
-  finalize: VX.photo.final,
-  backup: VX.photo.final,
-  'sync-gallery': VX.photo.published,
+  import: PF.staging,
+  finalize: PF.final,
+  backup: PF.final,
+  'sync-gallery': PF.published,
   cleanup: VX.warnSolid,
 }
 
@@ -448,11 +473,11 @@ function AdviceChip({ advice, primary, onRun, disabled: parentDisabled }: Advice
       whileHover={off ? {} : { scale: 1.04 }}
       whileTap={off ? {} : { scale: 0.96 }}
       style={{
-        display: 'inline-flex',
+        display: 'inline-flex', // theme-allow: motion.button internal flex row, not a layout wrapper
         alignItems: 'center',
-        gap: 6,
+        gap: 6, // theme-allow: motion.button, no Mantine spacing prop surface
         padding: primary ? '6px 14px' : '5px 11px',
-        borderRadius: 999,
+        borderRadius: VX.radiusPill,
         border: `1px solid ${borderColor}`,
         background: bgColor,
         color: textColor,
@@ -496,16 +521,16 @@ function AdviceBlock({ advices, onRun, dryRunPending }: AdviceBlockProps) {
 
   if (primary.tone === 'idle') {
     return (
-      <span style={{ fontSize: 13, color: alpha(VX.neutral, 0.65) }}>
+      <span style={{ fontSize: VX.text.sm, color: alpha(VX.neutral, 0.65) }}>
         Pipeline clear — nothing pending.
       </span>
     )
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+    <Flex align="center" gap={12} wrap="wrap">
       {/* Primary CTA — headline + detail */}
-      <span style={{ fontSize: 13, color: alpha(VX.neutral, 0.8) }}>
+      <span style={{ fontSize: VX.text.sm, color: alpha(VX.neutral, 0.8) }}>
         Next:{' '}
         <strong style={{ color: VX.neutral }}>{primary.headline}</strong>
         {primary.detail !== undefined && (
@@ -531,7 +556,7 @@ function AdviceBlock({ advices, onRun, dryRunPending }: AdviceBlockProps) {
           disabled={dryRunPending}
         />
       ))}
-    </div>
+    </Flex>
   )
 }
 
@@ -553,6 +578,7 @@ export type PipelineHeroProps = {
 }
 
 export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroProps = {}) {
+  const reducedMotion = useReducedMotion()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cameraRef = useRef<HTMLDivElement | null>(null)
   const stagingRef = useRef<HTMLDivElement | null>(null)
@@ -860,24 +886,17 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
           : 'Last operation'
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-        height: 'calc(100dvh - 168px)',
-      }}
-    >
+    <Flex direction="column" gap={16} style={{ height: 'calc(100dvh - 168px)' }}>
       {/* Status strip */}
-      <div
+      <Group
+        gap="md"
+        wrap="wrap"
+        align="center"
+        py={7}
+        px={14}
         style={{
           alignSelf: 'flex-start',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 18,
-          flexWrap: 'wrap',
-          padding: '7px 14px',
-          borderRadius: 999,
+          borderRadius: VX.radiusPill,
           border: `1px solid ${VX.surface.border}`,
           background: VX.surface.panel,
         }}
@@ -890,51 +909,52 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
         />
         <StatusChip label="Tailscale" connected={tailscaleConnected} hint={tailscaleConnected ? 'Homelab reachable over Tailscale' : 'Homelab unreachable'} />
         {activeOp && (
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 7,
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--vx-goodSolid)',
-              }}
-            >
-              <motion.span
-                style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--vx-goodSolid)' }}
-                animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }}
-                transition={{ duration: 1, repeat: Infinity }}
-              />
+          <Group gap={12} align="center" style={{ marginLeft: 'auto' }}>
+            <Group gap={7} align="center" wrap="nowrap" style={{ fontSize: VX.text.xs, fontWeight: 600, color: VX.goodSolid }}>
+              {reducedMotion ? (
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: VX.radiusPill,
+                    background: VX.goodSolid,
+                  }}
+                />
+              ) : (
+                <motion.span
+                  style={{ width: 7, height: 7, borderRadius: VX.radiusPill, background: VX.goodSolid }}
+                  animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }}
+                  transition={{ duration: MOTION_DURATION.slow, repeat: Infinity }}
+                />
+              )}
               {OP_LABELS[activeOp]} running…
-            </span>
-          </div>
+            </Group>
+          </Group>
         )}
-      </div>
+      </Group>
 
       {/* Command surface: pipeline diagram + live console, one framed panel */}
-      <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'stretch', minHeight: 200 }}>
-        <div
+      <Flex align="stretch" style={{ flex: '1 1 auto', minHeight: 200 }}>
+        <Flex
+          direction="column"
+          py={32}
+          px={28}
           style={{
             width: '100%',
-            display: 'flex',
-            flexDirection: 'column',
             border: `1px solid ${VX.surface.border}`,
-            borderRadius: 16,
+            borderRadius: VX.radiusCard,
             background: alpha(VX.neutral, 0.018),
-            padding: '32px 28px',
           }}
         >
         {/* Diagram (fills the upper canvas, centered) */}
-        <div style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', minHeight: 180 }}>
-        <div
+        <Flex align="center" style={{ flex: '1 1 auto', minHeight: 180 }}>
+        <Flex
           ref={containerRef}
+          align="center"
+          justify="space-between"
+          gap={8}
           style={{
             position: 'relative',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
             width: '100%',
           }}
         >
@@ -977,7 +997,10 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
                     strokeOpacity={highlighted ? (flowing ? 0.35 : 0.9) : 0.4}
                     style={{ transition: 'stroke-width 0.25s, stroke-opacity 0.25s' }}
                   />
-                  {flowing && (
+                  {flowing && reducedMotion && (
+                    <path d={path} fill="none" stroke={grad.to} strokeWidth={2.5} strokeLinecap="round" strokeDasharray="5 13" />
+                  )}
+                  {flowing && !reducedMotion && (
                     <motion.path
                       d={path}
                       fill="none"
@@ -987,7 +1010,7 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
                       strokeDasharray="5 13"
                       initial={{ strokeDashoffset: 0 }}
                       animate={{ strokeDashoffset: -36 }}
-                      transition={{ duration: 0.9, repeat: Infinity, ease: 'linear' }}
+                      transition={{ duration: MOTION_DURATION.slow, repeat: Infinity, ease: 'linear' }}
                     />
                   )}
                 </g>
@@ -1029,7 +1052,7 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
             nodeRef={cameraRef}
             index={0}
             label="Camera"
-            color={VX.photo.camera}
+            color={PF.camera}
             primaryCount={cameraTotal}
             primaryLabel="pending"
             secondaryCounts={[
@@ -1046,7 +1069,7 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
             nodeRef={stagingRef}
             index={1}
             label="Staging"
-            color={VX.photo.staging}
+            color={PF.staging}
             primaryCount={stagingFiles}
             primaryLabel="awaiting finalize"
             isActive={isEdgeActive('finalize')}
@@ -1057,19 +1080,19 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
             nodeRef={finalRef}
             index={2}
             label="Final"
-            color={VX.photo.final}
+            color={PF.final}
             primaryCount={finalTotal}
             primaryLabel="total photos"
             isActive={isEdgeActive('backup') || isEdgeActive('sync-gallery')}
           />
 
           {/* Publish column */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '0 0 auto' }}>
+          <Flex direction="column" gap={16} style={{ flex: '0 0 auto' }}>
             <NodeCard
               nodeRef={homelabRef}
               index={3}
               label="Homelab"
-              color={VX.photo.final}
+              color={PF.final}
               primaryCount={homelabCount}
               primaryLabel="backed up"
               statusDot={{ connected: tailscaleConnected, label: 'Tailscale' }}
@@ -1079,25 +1102,24 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
               nodeRef={galleryRef}
               index={4}
               label="Gallery"
-              color={VX.photo.published}
+              color={PF.published}
               primaryCount={publishedCount}
               primaryLabel="published"
               isActive={isEdgeActive('sync-gallery')}
             />
-          </div>
-        </div>
-        </div>
+          </Flex>
+        </Flex>
+        </Flex>
 
         {/* Console: live job progress (running/done) or next-step + maintenance (idle) */}
-        <div
+        <Flex
+          direction="column"
+          justify="center"
+          gap={12}
+          mt={28}
+          pt="lg"
           style={{
-            marginTop: 28,
-            paddingTop: 20,
             borderTop: `1px solid ${VX.surface.border}`,
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            gap: 12,
             minHeight: 60,
           }}
         >
@@ -1126,9 +1148,9 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
             dryRunPending={dryRunMutation.isPending || modalOpen}
           />
         )}
-        </div>
-        </div>
-      </div>
+        </Flex>
+        </Flex>
+      </Flex>
 
       <DryRunModal
         opened={modalOpen}
@@ -1150,6 +1172,6 @@ export function PipelineHero({ initialAction, onConsumeAction }: PipelineHeroPro
         isDestructive={pendingOp?.destructive ?? false}
         preview={preview}
       />
-    </div>
+    </Flex>
   )
 }

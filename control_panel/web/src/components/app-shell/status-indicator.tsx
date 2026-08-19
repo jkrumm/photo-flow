@@ -1,18 +1,14 @@
 import { Group, Text, Tooltip } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
 import { statusQueries } from '../../lib/queries/status'
+import classes from './status-indicator.module.css'
 
 function Dot({ connected, label }: { connected: boolean; label: string }) {
   return (
     <Tooltip label={`${label}: ${connected ? 'connected' : 'not found'}`} withArrow>
-      <div
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          background: connected ? 'var(--vx-goodSolid)' : 'var(--mantine-color-dimmed)',
-          flexShrink: 0,
-        }}
+      <span
+        className={classes.dot}
+        data-connected={connected || undefined}
         aria-label={`${label} ${connected ? 'connected' : 'disconnected'}`}
       />
     </Tooltip>
@@ -24,6 +20,9 @@ function Dot({ connected, label }: { connected: boolean; label: string }) {
  * - Camera connected dot
  * - SSD connected dot
  * - Staging file count (when > 0)
+ *
+ * Genuinely photo-flow domain (device/pipeline status), not the same signal as basalt-ui's
+ * ConnectivityIndicator (browser/API/SSE reachability) — kept as its own globalActions entry.
  */
 export function StatusIndicator() {
   const { data } = useQuery(statusQueries.status())

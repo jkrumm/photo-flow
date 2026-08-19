@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Loader, Progress, Tooltip } from '@mantine/core'
 import { useActiveJobStore, useJobLiveStore } from '../../lib/store'
 import { OP_LABELS } from '../../lib/op-metadata'
-import classes from './app-header.module.css'
+import classes from './job-progress-pill.module.css'
 
 /**
  * Compact job-progress indicator rendered in the app header.

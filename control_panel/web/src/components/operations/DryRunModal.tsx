@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Button, Checkbox, Group, Modal, Stack, Table, Text } from '@mantine/core'
 import { IconAlertTriangle, IconTrash } from '@tabler/icons-react'
+import { VX, alpha } from 'basalt-ui/tokens'
 import type { ActiveOp } from '../../lib/store'
 import { FIELD_LABELS } from '../../lib/op-metadata'
 
@@ -63,7 +64,7 @@ function PreviewSummary({ opId, preview }: { opId: ActiveOp; preview: Record<str
           Would move <strong>{moved}</strong> photo{moved !== 1 ? 's' : ''}{edits > 0 ? ` + ${edits} sidecars` : ''} from
           Staging to Final.{' '}
           {orphaned > 0 && (
-            <span style={{ color: 'var(--vx-warnSolid)', fontWeight: 600 }}>
+            <span style={{ color: VX.warnSolid, fontWeight: 600 }}>
               Would permanently delete {orphaned} orphaned RAW{orphaned !== 1 ? 's' : ''}.
             </span>
           )}
@@ -74,7 +75,7 @@ function PreviewSummary({ opId, preview }: { opId: ActiveOp; preview: Record<str
       const count = Number(p['orphaned'] ?? 0)
       return (
         <Text size="sm">
-          Would permanently delete <strong style={{ color: 'var(--vx-warnSolid)' }}>{count}</strong> orphaned
+          Would permanently delete <strong style={{ color: VX.warnSolid }}>{count}</strong> orphaned
           RAW{count !== 1 ? 's' : ''}. This cannot be undone.
         </Text>
       )
@@ -124,25 +125,19 @@ function PreviewRow({ field, value }: { field: string; value: unknown }) {
 
   return (
     <Table.Tr>
-      <Table.Td
-        style={{
-          color: isSignificantDeletion ? 'var(--vx-warnSolid)' : 'var(--mantine-color-dimmed)',
-          width: '55%',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 5,
-        }}
-      >
-        {isSignificantDeletion && (
-          <IconTrash size={12} style={{ flexShrink: 0, color: 'var(--vx-warnSolid)' }} />
-        )}
-        {FIELD_LABELS[field] ?? field}
+      <Table.Td style={{ color: isSignificantDeletion ? VX.warnSolid : undefined, width: '55%' }}>
+        <Group gap={5} align="center" wrap="nowrap" {...(isSignificantDeletion ? {} : { c: 'dimmed' })}>
+          {isSignificantDeletion && (
+            <IconTrash size={12} style={{ flexShrink: 0, color: VX.warnSolid }} />
+          )}
+          {FIELD_LABELS[field] ?? field}
+        </Group>
       </Table.Td>
       <Table.Td
         style={{
           fontVariantNumeric: 'tabular-nums',
           fontWeight: isSignificantDeletion ? 700 : 500,
-          color: isSignificantDeletion ? 'var(--vx-warnSolid)' : undefined,
+          color: isSignificantDeletion ? VX.warnSolid : undefined,
         }}
       >
         {isSignificantDeletion ? `−${numVal}` : formatValue(value)}
@@ -201,18 +196,19 @@ export function DryRunModal({
         {isDestructive && (
           <Group
             gap="xs"
+            px={12}
+            py={8}
             style={{
-              background: 'color-mix(in srgb, var(--vx-warn) 10%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--vx-warn) 30%, transparent)',
-              borderRadius: 6,
-              padding: '8px 12px',
+              background: alpha(VX.warnSolid, 0.1),
+              outline: `1px solid ${alpha(VX.warnSolid, 0.3)}`,
+              borderRadius: VX.radiusCtrl,
             }}
           >
             <IconAlertTriangle
               size={16}
-              style={{ color: 'var(--vx-warnSolid)', flexShrink: 0 }}
+              style={{ color: VX.warnSolid, flexShrink: 0 }}
             />
-            <Text size="xs" style={{ color: 'var(--vx-warnSolid)' }}>
+            <Text size="xs" style={{ color: VX.warnSolid }}>
               This operation permanently deletes files. It cannot be undone.
             </Text>
           </Group>

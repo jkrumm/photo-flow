@@ -1,6 +1,10 @@
-import { QueryClient } from '@tanstack/react-query'
+import { createBasaltQueryClient } from 'basalt-ui/query'
 
-export const queryClient = new QueryClient({
+/**
+ * The panel polls a localhost FastAPI, so a focus refetch buys nothing and a long retry just
+ * delays the error — both defaults are tightened over the basalt dashboard baseline.
+ */
+export const queryClient = createBasaltQueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,

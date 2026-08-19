@@ -1,5 +1,5 @@
 import { api } from '../api'
-import type { JobListResponse } from '../api-types'
+import type { JobHistoryResponse, JobListResponse } from '../api-types'
 
 export type ActiveJobResponse = {
   active: { job_id: string; op: string; status: string } | null
@@ -33,4 +33,35 @@ export const jobsQueries = {
     staleTime: 0,
     refetchInterval: 5000,
   }),
+
+  /**
+   * GET /jobs/history — the DURABLE record, newest first.
+   *
+   * Distinct from `list()` in the one way that matters: it survives a server restart.
+   * `GET /jobs` reads the in-memory manager, so a crash / logout / `make reload` empties
+   * it completely; this reads SQLite and still shows the backup that was 80 % done.
+   */
+  history: (limit = 25) => ({
+    queryKey: ['jobs', 'history', limit] as const,
+    queryFn: () => api.get<JobHistoryResponse>('/jobs/history', { limit }),
+    staleTime: 0,
+  }),
+
+  /**
+   * Terminal jobs the UI has never surfaced — the catch-up feed for the notification
+   * bell. Fetched once on mount: a job that finished while the panel was closed
+   * produced no toast and no history entry, so the bell recorded only what was watched.
+   */
+  unannounced: () => ({
+    queryKey: ['jobs', 'unannounced'] as const,
+    queryFn: () => api.get<JobHistoryResponse>('/jobs/history', { unannounced: true }),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  }),
+}
+
+export const jobsApi = {
+  /** Flag records as surfaced so a job never notifies twice. */
+  ack: (jobIds: string[]) =>
+    api.post<{ acknowledged: number }>('/jobs/history/ack', undefined, { job_ids: jobIds }),
 }

@@ -6,7 +6,8 @@ import { useState } from 'react'
 import { api } from '../lib/api'
 import { analyticsQueries } from '../lib/queries/analytics'
 import { backupQueries } from '../lib/queries/backup'
-import { VX, alpha } from '../lib/charts'
+import { VX, alpha } from 'basalt-ui/tokens'
+import { PF } from '../lib/series'
 import { formatBytes } from '../lib/format'
 import type { BackupSourceInfo, RefreshResponse } from '../lib/api-types'
 
@@ -31,7 +32,7 @@ function IndexRefreshCard() {
   const errMsg = isError && error instanceof Error ? error.message : null
 
   return (
-    <Card withBorder padding="md" style={{ borderColor: VX.surface.border }}>
+    <Card py="xs" px="sm">
       <Stack gap="sm">
         <Group justify="space-between" align="flex-start">
           <Stack gap={2}>
@@ -47,7 +48,7 @@ function IndexRefreshCard() {
             leftSection={<IconRefresh size={14} />}
             loading={isPending}
             onClick={() => mutate()}
-            style={{ backgroundColor: VX.photo.final, color: VX.surface.bg }}
+            style={{ backgroundColor: PF.final, color: VX.surface.bg }}
           >
             Refresh
           </Button>
@@ -55,11 +56,12 @@ function IndexRefreshCard() {
 
         {lastResult && (
           <Card
-            padding="xs"
+            py="xs"
+            px="sm"
             style={{
               backgroundColor: alpha(VX.good, 0.08),
               border: `1px solid ${alpha(VX.good, 0.25)}`,
-              borderRadius: 6,
+              borderRadius: VX.radiusCtrl,
             }}
           >
             <Group gap="md">
@@ -98,7 +100,7 @@ function OrphanedRawsCard() {
   const badgeLabel = isClean ? 'Clean' : `${orphaned} orphaned`
 
   return (
-    <Card withBorder padding="md" style={{ borderColor: VX.surface.border }}>
+    <Card py="xs" px="sm">
       <Stack gap="sm">
         <Group justify="space-between" align="center">
           <Stack gap={2}>
@@ -154,7 +156,9 @@ function OrphanedRawsCard() {
             <Button
               size="xs"
               variant="subtle"
-              style={{ color: VX.photo.published, padding: '2px 6px' }}
+              py={2}
+              px={6}
+              style={{ color: PF.published }}
               onClick={() => void navigate({ to: '/pipeline', search: { action: 'cleanup' } })}
             >
               Run Cleanup →
@@ -177,10 +181,17 @@ function BackupSourceCard({
   info: BackupSourceInfo
   color: string
 }) {
-  const needsSync = info.needs_sync
-  const isFresh = info.remote_count !== null && needsSync !== null && needsSync === 0
-  const isStale = info.remote_count !== null && needsSync !== null && needsSync > 0
-  const isUnknown = info.remote_count === null
+  // Normalise absent-vs-null once, here. Every field below v0.4.3 may be missing entirely when
+  // the daemon predates the panel build (see BackupSourceInfo) — `?? null` collapses both to null
+  // so the checks that follow are total.
+  const needsSync = info.needs_sync ?? null
+  const remoteCount = info.remote_count ?? null
+  const localCount = info.local_count ?? 0
+  const sidecarLocal = info.sidecar_local_count ?? null
+
+  const isFresh = remoteCount !== null && needsSync === 0
+  const isStale = remoteCount !== null && needsSync !== null && needsSync > 0
+  const isUnknown = remoteCount === null
 
   const statusColor = isFresh ? VX.good : isStale ? VX.warn : VX.neutral
   const statusLabel = isFresh ? 'Synced' : isStale ? `${needsSync} behind` : 'No data'
@@ -189,7 +200,7 @@ function BackupSourceCard({
   const sidecarsBehind = info.sidecar_needs_sync ?? 0
 
   return (
-    <Card withBorder padding="md" style={{ borderColor: VX.surface.border }}>
+    <Card py="xs" px="sm">
       <Stack gap="sm">
         <Group justify="space-between" align="center">
           <Text fw={500} size="sm" style={{ color }}>
@@ -213,7 +224,7 @@ function BackupSourceCard({
                 Local
               </Text>
               <Text size="sm" fw={500}>
-                {info.local_count.toLocaleString()}
+                {localCount.toLocaleString()}
               </Text>
             </Stack>
             {!isUnknown && (
@@ -222,7 +233,7 @@ function BackupSourceCard({
                   Remote
                 </Text>
                 <Text size="sm" fw={500}>
-                  {(info.remote_count ?? 0).toLocaleString()}
+                  {(remoteCount ?? 0).toLocaleString()}
                 </Text>
               </Stack>
             )}
@@ -239,10 +250,9 @@ function BackupSourceCard({
           </Group>
         )}
 
-        {info.available && info.sidecar_local_count !== null && (
-          <Text size="xs" style={{ color: sidecarsBehind > 0 ? VX.warn : undefined }} c={sidecarsBehind > 0 ? undefined : 'dimmed'}>
-            {info.sidecar_local_count.toLocaleString()} edit sidecar
-            {info.sidecar_local_count === 1 ? '' : 's'}
+        {info.available && sidecarLocal !== null && (
+          <Text size="xs" {...(sidecarsBehind > 0 ? { style: { color: VX.warn } } : { c: 'dimmed' })}>
+            {sidecarLocal.toLocaleString()} edit sidecar{sidecarLocal === 1 ? '' : 's'}
             {sidecarsBehind > 0 ? ` · ${sidecarsBehind.toLocaleString()} pending` : ''}
           </Text>
         )}
@@ -292,7 +302,7 @@ function BackupSection() {
           size="xs"
           variant="subtle"
           ml="auto"
-          style={{ color: VX.photo.final }}
+          style={{ color: PF.final }}
           onClick={() => void navigate({ to: '/pipeline', search: { action: 'backup' } })}
         >
           Run Backup →
@@ -300,7 +310,7 @@ function BackupSection() {
         <Button
           size="xs"
           variant="subtle"
-          style={{ color: VX.photo.published }}
+          style={{ color: PF.published }}
           onClick={() => void navigate({ to: '/pipeline', search: { action: 'sync' } })}
         >
           Sync Gallery →
@@ -308,10 +318,13 @@ function BackupSection() {
       </Group>
 
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
-        <BackupSourceCard label="Final" info={data.final} color={VX.photo.final} />
-        <BackupSourceCard label="RAWs" info={data.raws} color={VX.photo.raws} />
-        <BackupSourceCard label="Videos" info={data.videos} color={VX.photo.videos} />
-        <BackupSourceCard label="Staging (optional)" info={data.staging} color={VX.photo.staging} />
+        <BackupSourceCard label="Final" info={data.final} color={PF.final} />
+        <BackupSourceCard label="RAWs" info={data.raws} color={PF.raws} />
+        <BackupSourceCard label="Videos" info={data.videos} color={PF.videos} />
+        {/* Absent when the running daemon predates v0.4.3 — omit the card, don't crash the page. */}
+        {data.staging && (
+          <BackupSourceCard label="Staging (optional)" info={data.staging} color={PF.staging} />
+        )}
       </SimpleGrid>
 
       {!connectionOk && (
@@ -339,7 +352,7 @@ function StorageOverviewCard() {
     data.final.count + data.staging.count + data.raws.count + data.videos.count
 
   return (
-    <Card withBorder padding="md" style={{ borderColor: VX.surface.border }}>
+    <Card py="xs" px="sm">
       <Stack gap={4}>
         <Text fw={500} size="sm">
           Total Local Storage
@@ -365,7 +378,7 @@ function StorageOverviewCard() {
             <Text size="xs" c="dimmed">
               Final
             </Text>
-            <Text size="sm" fw={500} style={{ color: VX.photo.final }}>
+            <Text size="sm" fw={500} style={{ color: PF.final }}>
               {formatBytes(data.final.bytes)}
             </Text>
           </Stack>
@@ -376,7 +389,7 @@ function StorageOverviewCard() {
             <Text
               size="sm"
               fw={500}
-              style={{ color: data.raws.available ? VX.photo.raws : VX.neutral }}
+              style={{ color: data.raws.available ? PF.raws : VX.neutral }}
             >
               {data.raws.available ? formatBytes(data.raws.bytes) : '—'}
             </Text>
@@ -393,10 +406,10 @@ function LibraryPage() {
   return (
     <Stack gap="md">
       <Stack gap={4}>
-        <Title order={2} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Group gap={8}>
           <IconHeartbeat size={24} />
-          Library Health
-        </Title>
+          <Title order={2}>Library Health</Title>
+        </Group>
         <Text c="dimmed" size="sm">
           Orphaned RAWs · Backup freshness · Index maintenance
         </Text>

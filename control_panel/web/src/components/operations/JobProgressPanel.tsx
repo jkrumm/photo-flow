@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
-import { Button, Group, Progress, Stack, Text } from '@mantine/core'
+import { motion } from 'motion/react'
+import { MOTION_DURATION } from 'basalt-ui'
+import { useReducedMotion } from '@mantine/hooks'
+import { Box, Button, Group, Progress, ScrollArea, SimpleGrid, Stack, Text } from '@mantine/core'
 import { IconCheck, IconPlayerStopFilled, IconX } from '@tabler/icons-react'
-import { VX } from '../../lib/charts/tokens'
-import { alpha } from '../../lib/charts/utils/color'
+import { VX, alpha } from 'basalt-ui/tokens'
 import type { JobEventsState } from '../../hooks/useJobEvents'
 import type { ActiveOp } from '../../lib/store'
 import { useActiveJobStore } from '../../lib/store'
@@ -39,7 +40,10 @@ function ResultSummary({
   if (error !== null) {
     return (
       <Group gap="xs" align="flex-start">
-        <IconX size={14} style={{ color: VX.bad, marginTop: 2, flexShrink: 0 }} />
+        {/* Box carries the optical nudge — a Tabler icon takes no Mantine spacing prop. */}
+        <Box mt={2} style={{ flexShrink: 0, lineHeight: 0 }}>
+          <IconX size={14} style={{ color: VX.bad }} />
+        </Box>
         <Text size="xs" style={{ color: VX.bad }}>
           {error}
         </Text>
@@ -51,24 +55,18 @@ function ResultSummary({
   }
   const entries = Object.entries(result).filter(([k]) => !SKIP_RESULT.has(k))
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-        gap: '4px 16px',
-      }}
-    >
+    <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }} spacing={16} verticalSpacing={4}>
       {entries.map(([k, v]) => (
-        <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Stack key={k} gap={1}>
           <Text size="xs" c="dimmed" style={{ lineHeight: 1.2 }}>
             {RESULT_LABELS[k] ?? k}
           </Text>
           <Text size="sm" fw={600} style={{ fontVariantNumeric: 'tabular-nums' }}>
             {formatResultValue(v)}
           </Text>
-        </div>
+        </Stack>
       ))}
-    </div>
+    </SimpleGrid>
   )
 }
 
@@ -112,6 +110,7 @@ export type JobProgressPanelProps = {
 
 export function JobProgressPanel({ op: _op, opLabel, state, embedded = false, onStop, stopping = false, isRunning = false }: JobProgressPanelProps) {
   const logRef = useRef<HTMLDivElement>(null)
+  const reducedMotion = useReducedMotion()
 
   // Read durable terminal state so the result summary survives the useJobEvents reset that
   // happens when clearActiveJob() nulls the jobId. isRunning guards against showing a stale
@@ -168,19 +167,19 @@ export function JobProgressPanel({ op: _op, opLabel, state, embedded = false, on
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
-      transition={{ duration: 0.25 }}
+      transition={{ duration: MOTION_DURATION.base }}
       style={
         embedded
-          ? { background: 'transparent', border: 'none', padding: 0 }
+          ? { background: 'transparent', border: 'none' }
           : {
               background: VX.surface.panel,
               border: `1px solid ${effectiveDone && effectiveError === null ? alpha(VX.good, 0.4) : effectiveDone ? alpha(VX.bad, 0.4) : VX.surface.border}`,
-              borderRadius: 10,
-              padding: '16px 20px',
+              borderRadius: VX.radiusCard,
             }
       }
     >
-      <Stack gap="sm">
+      {/* Inset lives on the Stack, not the motion.div — a motion element takes no Mantine prop. */}
+      <Stack gap="sm" p={embedded ? 0 : 'md'}>
         {/* Header */}
         <Group justify="space-between" align="center" gap="xs">
           <Group gap={8} align="center">
@@ -190,17 +189,27 @@ export function JobProgressPanel({ op: _op, opLabel, state, embedded = false, on
               ) : (
                 <IconCheck size={16} style={{ color: VX.good }} />
               )
+            ) : reducedMotion ? (
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: VX.radiusPill,
+                  background: VX.goodSolid,
+                  flexShrink: 0,
+                }}
+              />
             ) : (
               <motion.div
                 style={{
                   width: 8,
                   height: 8,
-                  borderRadius: '50%',
-                  background: 'var(--vx-goodSolid)',
+                  borderRadius: VX.radiusPill,
+                  background: VX.goodSolid,
                   flexShrink: 0,
                 }}
                 animate={{ scale: [1, 1.35, 1], opacity: [1, 0.6, 1] }}
-                transition={{ duration: 1, repeat: Infinity }}
+                transition={{ duration: MOTION_DURATION.slow, repeat: Infinity }}
               />
             )}
             <Text fw={600} size="sm">
@@ -266,14 +275,14 @@ export function JobProgressPanel({ op: _op, opLabel, state, embedded = false, on
 
         {/* Rclone transfer info (backup ops) */}
         {showTransfer && state.lastTransfer !== null && (
-          <Group gap={16} style={{ fontSize: 12 }}>
+          <Group gap={16} style={{ fontSize: VX.text.xs }}>
             {state.lastTransfer.pct !== undefined && (
               <span style={{ color: alpha(VX.neutral, 0.8) }}>
                 {Math.round(state.lastTransfer.pct)}%
               </span>
             )}
             {state.lastTransfer.speed !== undefined && (
-              <span style={{ color: 'var(--vx-goodSolid)' }}>{state.lastTransfer.speed}</span>
+              <span style={{ color: VX.goodSolid }}>{state.lastTransfer.speed}</span>
             )}
             {state.lastTransfer.eta !== undefined && (
               <span style={{ color: alpha(VX.neutral, 0.65) }}>
@@ -290,55 +299,48 @@ export function JobProgressPanel({ op: _op, opLabel, state, embedded = false, on
 
         {/* Log tail */}
         {state.logs.length > 0 && !effectiveDone && (
-          <div
-            ref={logRef}
+          <ScrollArea
+            viewportRef={logRef}
+            type="hover"
+            scrollbars="y"
+            scrollbarSize={9}
+            h={120}
+            px={10}
+            py={6}
             style={{
-              maxHeight: 120,
-              overflowY: 'auto',
               background: VX.surface.bg,
               border: `1px solid ${alpha(VX.neutral, 0.1)}`,
-              borderRadius: 6,
-              padding: '6px 10px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
+              borderRadius: VX.radiusCtrl,
             }}
           >
-            {state.logs.slice(-20).map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'baseline',
-                  fontSize: 11,
-                  lineHeight: 1.4,
-                }}
-              >
-                <span
-                  style={{
-                    color: levelColor(log.level),
-                    fontWeight: 600,
-                    minWidth: 48,
-                    textTransform: 'uppercase',
-                    flexShrink: 0,
-                  }}
-                >
-                  {log.level}
-                </span>
-                <span
-                  style={{
-                    color: alpha(VX.neutral, 0.8),
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {log.message}
-                </span>
-              </div>
-            ))}
-          </div>
+            <Stack gap={2}>
+              {state.logs.slice(-20).map((log) => (
+                <Group key={log.id} gap={8} align="baseline" wrap="nowrap" style={{ fontSize: VX.text.micro, lineHeight: 1.4 }}>
+                  <span
+                    style={{
+                      color: levelColor(log.level),
+                      fontWeight: 600,
+                      minWidth: 48,
+                      textTransform: 'uppercase',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {log.level}
+                  </span>
+                  <span
+                    style={{
+                      color: alpha(VX.neutral, 0.8),
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {log.message}
+                  </span>
+                </Group>
+              ))}
+            </Stack>
+          </ScrollArea>
         )}
 
         {/* Done: result summary — reads from durable store when state has been reset */}

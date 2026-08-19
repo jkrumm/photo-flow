@@ -3,16 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#EDEFF2" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1C2127" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="manifest" href="/site.webmanifest" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="Photo Flow" />
-    <meta name="darkreader-lock" />
     <title>Photo Flow</title>
+    <!--
+      Theme-color / icons / manifest / apple-mobile-web-app meta are injected by basaltAppPlugin
+      (basalt-ui/vite) from the token palette — never hand-write those hexes here.
+    -->
     <script>
       // Prevent flash of wrong color scheme on load
       try {

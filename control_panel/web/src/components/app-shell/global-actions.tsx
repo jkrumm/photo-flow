@@ -1,13 +1,24 @@
+import { Divider, Group } from '@mantine/core'
+import { ThemeToggle } from 'basalt-ui'
+import { NotificationBell } from 'basalt-ui/notifications'
+import { JobProgressPill } from './job-progress-pill'
+import { NotificationSettings } from './notification-settings'
 import { StatusIndicator } from './status-indicator'
 
 /**
- * Global slot of the app-shell top bar — shell-owned and persistent across routes.
- * Photo-flow: shows device connection status + staging count.
+ * Persistent, shell-owned top-bar slot — rendered via BasaltShell's `globalActions` prop.
+ * Photo-flow domain pieces (device status, job progress, sound/OS-notification preferences)
+ * alongside basalt-ui's theme toggle and notification bell.
  */
-export function GlobalActions({ className }: { className?: string }) {
+export function GlobalActions() {
   return (
-    <div className={className}>
+    <Group gap="xs" wrap="nowrap">
       <StatusIndicator />
-    </div>
+      <JobProgressPill />
+      <NotificationSettings />
+      <Divider orientation="vertical" visibleFrom="sm" style={{ height: 24 }} />
+      <ThemeToggle />
+      <NotificationBell />
+    </Group>
   )
 }

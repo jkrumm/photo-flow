@@ -22,11 +22,15 @@ function buildUrl(path: string, params?: QueryParams): string {
   return `${BASE}${path}?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)]))}`
 }
 
+/** Per-call transport options. `signal` lets React Query abort a superseded request. */
+type RequestOptions = { signal?: AbortSignal }
+
 async function request<T>(
   method: string,
   path: string,
   params?: QueryParams,
   body?: Record<string, unknown>,
+  options?: RequestOptions,
 ): Promise<T> {
   const url = buildUrl(path, params)
   const hasBody = body !== undefined && body !== null
@@ -37,6 +41,7 @@ async function request<T>(
     ...(hasBody
       ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
       : {}),
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -46,7 +51,8 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string, params?: QueryParams) => request<T>('GET', path, params),
+  get: <T>(path: string, params?: QueryParams, options?: RequestOptions) =>
+    request<T>('GET', path, params, undefined, options),
   post: <T>(path: string, params?: QueryParams, body?: Record<string, unknown>) =>
     request<T>('POST', path, params, body),
 }

@@ -1,32 +1,44 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createPersistedState, readPersistedValue } from 'basalt-ui/state'
 
-type UiState = {
-  sidebarCollapsed: boolean
-  setSidebarCollapsed: (v: boolean) => void
-  toggleSidebar: () => void
-  /** Play a chime when a job finishes. Default on. */
-  soundEnabled: boolean
-  toggleSound: () => void
-  /** Fire a native OS notification when the tab is backgrounded on job completion. Default off. */
-  desktopNotifyEnabled: boolean
-  setDesktopNotifyEnabled: (v: boolean) => void
+// ── UI preferences (basalt-ui/state, not Zustand — see basalt-state.md) ────────
+//
+// Simple standalone booleans that must survive navigation but aren't URL-worthy.
+// createPersistedState's returned hook is React-only (useSyncExternalStore), so
+// the non-component call sites below (job-controller's SSE handler, notify.ts)
+// read the current value via readPersistedValue instead of a store getState().
+
+const SOUND_KEY = 'sound-enabled'
+const SOUND_VERSION = 1
+
+/** Play a chime when a job finishes. Default on. */
+export const useSoundEnabled = createPersistedState({
+  key: SOUND_KEY,
+  version: SOUND_VERSION,
+  initial: true,
+})
+
+/** Non-component read of the current sound preference (SSE event handlers, etc.). */
+export function isSoundEnabled(): boolean {
+  const v = readPersistedValue(SOUND_KEY, SOUND_VERSION)
+  return typeof v === 'boolean' ? v : true
 }
 
-export const useUiStore = create<UiState>()(
-  persist(
-    (set) => ({
-      sidebarCollapsed: false,
-      setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
-      toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-      soundEnabled: true,
-      toggleSound: () => set((s) => ({ soundEnabled: !s.soundEnabled })),
-      desktopNotifyEnabled: false,
-      setDesktopNotifyEnabled: (v) => set({ desktopNotifyEnabled: v }),
-    }),
-    { name: 'photoflow-ui' },
-  ),
-)
+const DESKTOP_NOTIFY_KEY = 'desktop-notify-enabled'
+const DESKTOP_NOTIFY_VERSION = 1
+
+/** Fire a native OS notification when the tab is backgrounded on job completion. Default off. */
+export const useDesktopNotifyEnabled = createPersistedState({
+  key: DESKTOP_NOTIFY_KEY,
+  version: DESKTOP_NOTIFY_VERSION,
+  initial: false,
+})
+
+/** Non-component read of the current desktop-notify preference (used by notify.ts). */
+export function isDesktopNotifyEnabled(): boolean {
+  const v = readPersistedValue(DESKTOP_NOTIFY_KEY, DESKTOP_NOTIFY_VERSION)
+  return typeof v === 'boolean' ? v : false
+}
 
 /**
  * Active-job store — shared between PipelineHero (Group 10) and Operations (Group 11).

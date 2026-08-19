@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ActionIcon, Button, Divider, Popover, Stack, Switch, Text, Tooltip } from '@mantine/core'
 import { IconBell } from '@tabler/icons-react'
-import { useUiStore } from '../../lib/store'
+import { useDesktopNotifyEnabled, useSoundEnabled } from '../../lib/store'
 import { resumeAudio, playSuccess } from '../../lib/sound'
 
 // Moved to module scope: captures no component state, so recreating on every
@@ -14,9 +14,9 @@ function testChime() {
 /**
  * Notification settings popover — bell icon in the app header.
  *
- * Persisted state lives in useUiStore (persisted zustand slice):
- *   soundEnabled / toggleSound — play a chime on job completion.
- *   desktopNotifyEnabled / setDesktopNotifyEnabled — fire an OS notification
+ * Persisted state lives in basalt-ui/state's createPersistedState (src/lib/store.ts):
+ *   useSoundEnabled — play a chime on job completion.
+ *   useDesktopNotifyEnabled — fire an OS notification
  *     when the tab is backgrounded (requires Notification permission).
  *
  * Enabling desktop notifications calls Notification.requestPermission() inside
@@ -27,10 +27,8 @@ function testChime() {
  * chime — useful to verify the sound volume before a real job finishes.
  */
 export function NotificationSettings() {
-  const soundEnabled = useUiStore((s) => s.soundEnabled)
-  const toggleSound = useUiStore((s) => s.toggleSound)
-  const desktopNotifyEnabled = useUiStore((s) => s.desktopNotifyEnabled)
-  const setDesktopNotifyEnabled = useUiStore((s) => s.setDesktopNotifyEnabled)
+  const [soundEnabled, setSoundEnabled] = useSoundEnabled()
+  const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useDesktopNotifyEnabled()
 
   // Track permission status locally so we can re-render after a requestPermission call.
   const [permStatus, setPermStatus] = useState<NotificationPermission>(
@@ -80,7 +78,7 @@ export function NotificationSettings() {
             label="Sound"
             description="Chime when a job finishes"
             checked={soundEnabled}
-            onChange={() => toggleSound()}
+            onChange={() => setSoundEnabled(!soundEnabled)}
           />
 
           <Switch

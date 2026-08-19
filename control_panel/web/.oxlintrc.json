@@ -1,41 +1,9 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": [
-    "react",
-    "react-perf",
-    "typescript",
-    "import",
-    "unicorn",
-    "jsx-a11y",
-    "promise",
-    "oxc"
-  ],
-  "categories": {
-    "correctness": "error",
-    "suspicious": "warn"
-  },
+  "extends": ["./node_modules/basalt-ui/configs/oxlint.json"],
+  "plugins": ["react", "react-perf", "typescript", "import", "unicorn", "jsx-a11y", "promise", "oxc"],
   "rules": {
-    "no-var": "error",
-    "eqeqeq": "error",
-    "no-console": "warn",
-    "no-shadow": "off",
-    "react/rules-of-hooks": "error",
-    "react/jsx-key": "error",
-    "react/react-in-jsx-scope": "off",
-    "typescript/no-explicit-any": "warn",
-    "import/no-duplicates": "error",
-    "import/no-unassigned-import": "off",
-    "no-restricted-imports": [
-      "error",
-      {
-        "paths": [
-          {
-            "name": "@visx/tooltip",
-            "message": "Use ChartTooltip + primitives from src/lib/charts."
-          }
-        ]
-      }
-    ]
+    "eqeqeq": "error"
   },
   "ignorePatterns": ["src/routeTree.gen.ts", "src/lib/api-types.ts"]
 }

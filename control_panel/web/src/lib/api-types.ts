@@ -23,7 +23,19 @@ export type PendingResponse = {
 
 // ── Jobs ─────────────────────────────────────────────────────────────────────
 
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'needs_confirm'
+/**
+ * `interrupted` exists only in the DURABLE record (GET /jobs/history). A live Job
+ * object cannot reach it — it is assigned by the startup sweep to rows whose process
+ * no longer exists, which is precisely the state that used to be invisible.
+ */
+export type JobStatus =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+  | 'needs_confirm'
+  | 'interrupted'
 
 /** Response from POST /ops/* — job is always admitted to the FIFO queue. */
 export type JobStarted = {
@@ -48,6 +60,28 @@ export type JobQueueItem = {
 
 export type JobListResponse = {
   jobs: JobQueueItem[]
+}
+
+/**
+ * One durable record from GET /jobs/history — the SQLite-backed row, not the
+ * in-memory job. Survives a restart, which is the whole point: `GET /jobs` is empty
+ * after one, and a 22 GB backup that was 80 % through used to leave nothing at all.
+ */
+export type JobHistoryEntry = {
+  job_id: string
+  op: string
+  status: JobStatus
+  queued_at: string
+  started_at: string | null
+  finished_at: string | null
+  result: Record<string, unknown> | null
+  error: string | null
+  /** false until the UI has surfaced this job's outcome in the notification history. */
+  announced: boolean
+}
+
+export type JobHistoryResponse = {
+  jobs: JobHistoryEntry[]
 }
 
 export type JobResponse = {
@@ -145,27 +179,38 @@ export type BackupAllResult = {
   errors: number
 }
 
+/**
+ * Fields added after v0.4.2 are OPTIONAL, not just nullable.
+ *
+ * The control panel is a long-running KeepAlive daemon: it holds its Python modules in memory
+ * from process start, while the SPA it serves is whatever was last built on disk. So a freshly
+ * built panel routinely talks to a server that predates the field it wants, and an absent key
+ * arrives as `undefined` — NOT `null`. Typing these as `number | null` told TypeScript a
+ * `!== null` guard was total, and it silently wasn't: `undefined !== null` passes straight
+ * through to `.toLocaleString()` and takes the whole route down.
+ */
 export type BackupSourceInfo = {
   available: boolean
   local_count: number
   path: string | null
   remote_path: string | null
   extension: string | null
-  remote_count: number | null
-  needs_sync: number | null
-  requires: string | null
-  optional: boolean
+  remote_count?: number | null
+  needs_sync?: number | null
+  requires?: string | null
+  optional?: boolean
   /** .photo-edit sidecars — counted separately, but folded into needs_sync. */
-  sidecar_local_count: number | null
-  sidecar_remote_count: number | null
-  sidecar_needs_sync: number | null
+  sidecar_local_count?: number | null
+  sidecar_remote_count?: number | null
+  sidecar_needs_sync?: number | null
 }
 
 export type BackupAvailabilityResponse = {
   final: BackupSourceInfo
   raws: BackupSourceInfo
   videos: BackupSourceInfo
-  staging: BackupSourceInfo
+  /** Absent on a server older than v0.4.3 — render defensively. */
+  staging?: BackupSourceInfo
   connection: string | null
 }
 
@@ -260,7 +305,12 @@ export type LibraryHealthResponse = {
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
-export type LastRun = { ts: string | null; ok: boolean } | null
+/**
+ * `interrupted` marks a run the server was still executing when the process died —
+ * the timestamp is fresh but nothing completed. Optional, not just nullable: a
+ * long-running daemon routinely predates the SPA build that wants the field.
+ */
+export type LastRun = { ts: string | null; ok: boolean; interrupted?: boolean } | null
 
 export type PipelineStatus = {
   camera_connected: boolean

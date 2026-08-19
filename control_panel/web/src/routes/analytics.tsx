@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Card, Skeleton, SimpleGrid, Stack, Text, Title, SegmentedControl } from '@mantine/core'
+import { Card, Flex, Group, Skeleton, SimpleGrid, Stack, Text, Title, SegmentedControl } from '@mantine/core'
 import { IconChartHistogram } from '@tabler/icons-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Bars, ChartCard, ChartLegend, Donut, VX, alpha } from '../lib/charts'
+import { Bars, ChartCard, Donut, VX, alpha, useChartSize } from 'basalt-ui/charts'
+import { PF } from '../lib/series'
 import { analyticsQueries } from '../lib/queries/analytics'
 import { formatBytes } from '../lib/format'
 import type { BucketGrain, MapPoint, SettingsEntry, StorageResponse } from '../lib/api-types'
@@ -12,38 +13,17 @@ export const Route = createFileRoute('/analytics')({
   component: AnalyticsPage,
 })
 
-// ── Shared hook ───────────────────────────────────────────────────────────────
-
-function useChartWidth() {
-  const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(640)
-  useEffect(() => {
-    if (!ref.current) return
-    const ro = new ResizeObserver(([entry]) => {
-      if (entry) setWidth(Math.max(entry.contentRect.width, 200))
-    })
-    ro.observe(ref.current)
-    return () => ro.disconnect()
-  }, [])
-  return { ref, width }
-}
-
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 function EmptyChart({ height }: { height: number }) {
   return (
-    <div
-      style={{
-        height,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: alpha(VX.neutral, 0.55),
-        fontSize: 13,
-      }}
+    <Flex
+      align="center"
+      justify="center"
+      style={{ height, color: alpha(VX.neutral, 0.55), fontSize: VX.text.sm }}
     >
       No data — refresh the index to populate.
-    </div>
+    </Flex>
   )
 }
 
@@ -69,13 +49,13 @@ function SummaryTiles() {
       : '—'
 
   const tiles = [
-    { label: 'Total Photos', value: data.total_photos.toLocaleString(), color: VX.photo.final },
-    { label: 'Published', value: data.total_published.toLocaleString(), color: VX.photo.published },
-    { label: 'This Month', value: data.this_month_count.toLocaleString(), color: VX.photo.staging },
+    { label: 'Total Photos', value: data.total_photos.toLocaleString(), color: PF.final },
+    { label: 'Published', value: data.total_published.toLocaleString(), color: PF.published },
+    { label: 'This Month', value: data.this_month_count.toLocaleString(), color: PF.staging },
     {
       label: 'Avg Rating',
       value: data.avg_rating !== null ? `${data.avg_rating.toFixed(1)} ★` : '—',
-      color: VX.photo.rating4,
+      color: PF.rating4,
     },
     {
       label: 'Since',
@@ -88,7 +68,7 @@ function SummaryTiles() {
   return (
     <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }}>
       {tiles.map(({ label, value, color }) => (
-        <Card key={label} withBorder padding="sm" style={{ borderColor: VX.surface.border }}>
+        <Card key={label} padding="sm">
           <Text size="xs" c="dimmed" mb={4}>
             {label}
           </Text>
@@ -113,8 +93,7 @@ const BUCKET_OPTIONS = [
 function PhotosOverTimeChart() {
   const [bucket, setBucket] = useState<BucketGrain>('month')
   const { data, isLoading } = useQuery(analyticsQueries.overTime(bucket))
-  const { ref, width } = useChartWidth()
-  const [highlighted, setHighlighted] = useState<string | null>(null)
+  const isEmpty = !isLoading && (!data || data.length === 0)
 
   const toggle = (
     <SegmentedControl
@@ -126,46 +105,34 @@ function PhotosOverTimeChart() {
   )
 
   return (
-    <div ref={ref}>
-      <ChartCard
-        title="Photos over Time"
-        subtitle="Finalized per period — rating ≥ 4 vs. other"
-        tooltip="Number of photos finalized per time period, colour-split by rating band."
-        extra={toggle}
-      >
-        <ChartLegend
-          items={[
-            { key: 'high_rated', label: 'Rating ≥ 4', color: VX.photo.published, shape: 'bar' },
-            { key: 'other', label: 'Other', color: VX.photo.final, shape: 'bar' },
+    <ChartCard
+      title="Photos over Time"
+      subtitle="Finalized per period — rating ≥ 4 vs. other"
+      tooltip="Number of photos finalized per time period, colour-split by rating band."
+      extra={toggle}
+    >
+      {isEmpty ? (
+        <EmptyChart height={220} />
+      ) : (
+        <Bars
+          data={data ?? []}
+          isPending={isLoading}
+          height={220}
+          chartId="photos-over-time"
+          getX={(d) => d.x}
+          getValue={(d, key) =>
+            key === 'high_rated' ? d.high_rated : key === 'other' ? d.other : null
+          }
+          positiveBars={[
+            { key: 'high_rated', label: 'Rating ≥ 4', color: PF.published },
+            { key: 'other', label: 'Other', color: PF.final },
           ]}
-          highlighted={highlighted}
-          onHighlight={setHighlighted}
+          leftAxis={{ domain: 'auto' }}
+          formatValue={(v) => String(v)}
+          ariaLabel="Photos finalized per period, split by rating band"
         />
-        {isLoading ? (
-          <Skeleton h={220} />
-        ) : !data || data.length === 0 ? (
-          <EmptyChart height={220} />
-        ) : (
-          <Bars
-            data={data}
-            width={width}
-            height={220}
-            chartId="photos-over-time"
-            getX={(d) => d.x}
-            getValue={(d, key) =>
-              key === 'high_rated' ? d.high_rated : key === 'other' ? d.other : null
-            }
-            positiveBars={[
-              { key: 'high_rated', label: 'Rating ≥ 4', color: VX.photo.published },
-              { key: 'other', label: 'Other', color: VX.photo.final },
-            ]}
-            leftAxis={{ domain: 'auto' }}
-            formatValue={(v) => String(v)}
-            highlightedKey={highlighted}
-          />
-        )}
-      </ChartCard>
-    </div>
+      )}
+    </ChartCard>
   )
 }
 
@@ -177,38 +144,29 @@ const ratingColor = (rKey: string): string => {
   const map: Record<string, string> = {
     rNull: alpha(VX.neutral, 0.45),
     r0: alpha(VX.neutral, 0.7),
-    r1: VX.photo.rating1,
-    r2: VX.photo.rating2,
-    r3: VX.photo.rating3,
-    r4: VX.photo.rating4,
-    r5: VX.photo.rating5,
+    r1: PF.rating1,
+    r2: PF.rating2,
+    r3: PF.rating3,
+    r4: PF.rating4,
+    r5: PF.rating5,
   }
   return map[rKey] ?? VX.neutral
 }
 
 function RatingHistogramChart() {
   const { data, isLoading } = useQuery(analyticsQueries.ratings())
-  const { ref, width } = useChartWidth()
+  const isEmpty = !isLoading && (!data || data.histogram.length === 0)
 
-  if (isLoading) {
+  if (isEmpty) {
     return (
-      <div ref={ref}>
-        <Skeleton h={220} />
-      </div>
-    )
-  }
-  if (!data || data.histogram.length === 0) {
-    return (
-      <div ref={ref}>
-        <ChartCard title="Rating Distribution" tooltip="Photo counts by star rating.">
-          <EmptyChart height={160} />
-        </ChartCard>
-      </div>
+      <ChartCard title="Rating Distribution" tooltip="Photo counts by star rating.">
+        <EmptyChart height={160} />
+      </ChartCard>
     )
   }
 
   const countByRating = new Map<number | null, number>(
-    data.histogram.map((h) => [h.rating, h.count]),
+    (data?.histogram ?? []).map((h) => [h.rating, h.count]),
   )
 
   const allSlots: Array<{ rating: number | null; rKey: string; label: string }> = [
@@ -236,25 +194,26 @@ function RatingHistogramChart() {
   }))
 
   return (
-    <div ref={ref}>
-      <ChartCard
-        title="Rating Distribution"
-        subtitle={`${data.total_final.toLocaleString()} total · ${data.total_published.toLocaleString()} published`}
-        tooltip="Star-rating breakdown across all Final photos."
-      >
-        <Bars
-          data={histData}
-          width={width}
-          height={195}
-          chartId="rating-dist"
-          getX={(d) => d.x}
-          getValue={(d, key) => (d.rKey === key ? d.count : null)}
-          positiveBars={positiveBars}
-          leftAxis={{ domain: 'auto' }}
-          formatValue={(v) => String(v)}
-        />
-      </ChartCard>
-    </div>
+    <ChartCard
+      title="Rating Distribution"
+      {...(data && {
+        subtitle: `${data.total_final.toLocaleString()} total · ${data.total_published.toLocaleString()} published`,
+      })}
+      tooltip="Star-rating breakdown across all Final photos."
+    >
+      <Bars
+        data={histData}
+        isPending={isLoading}
+        height={195}
+        chartId="rating-dist"
+        getX={(d) => d.x}
+        getValue={(d, key) => (d.rKey === key ? d.count : null)}
+        positiveBars={positiveBars}
+        leftAxis={{ domain: 'auto' }}
+        formatValue={(v) => String(v)}
+        ariaLabel="Star-rating breakdown across all Final photos"
+      />
+    </ChartCard>
   )
 }
 
@@ -262,13 +221,12 @@ function RatingHistogramChart() {
 
 function PublishRateDonut() {
   const { data, isLoading } = useQuery(analyticsQueries.ratings())
-  const { ref, width } = useChartWidth()
 
   if (isLoading) {
     return (
-      <div ref={ref}>
+      <ChartCard title="Published vs. Other" tooltip="Share of Final photos with rating ≥ 4 synced to the gallery.">
         <Skeleton h={220} />
-      </div>
+      </ChartCard>
     )
   }
   if (!data) return null
@@ -277,48 +235,37 @@ function PublishRateDonut() {
   const other = Math.max(data.total_final - published, 0)
   const rate =
     data.total_final > 0 ? `${Math.round((published / data.total_final) * 100)}%` : '—'
-  const donutSize = Math.min(width, 180)
 
   return (
-    <div ref={ref}>
-      <ChartCard
-        title="Published vs. Other"
-        subtitle={`${rate} publish rate`}
-        tooltip="Share of Final photos with rating ≥ 4 synced to the gallery."
-      >
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0' }}>
-          <Donut
-            data={[
-              { key: 'published', value: published },
-              { key: 'other', value: other },
-            ]}
-            width={donutSize}
-            height={donutSize}
-            colorForKey={(k) => (k === 'published' ? VX.photo.published : alpha(VX.neutral, 0.45))}
-            formatValue={(v) => v.toLocaleString()}
-            seriesLabel={(k) => (k === 'published' ? 'Published' : 'Other')}
-            centerLabel={rate}
-            centerSubLabel="published"
-          />
-        </div>
-        <ChartLegend
-          items={[
-            { key: 'published', label: 'Published (≥ 4★)', color: VX.photo.published, shape: 'bar' },
-            { key: 'other', label: 'Other', color: alpha(VX.neutral, 0.45), shape: 'bar' },
-          ]}
-        />
-      </ChartCard>
-    </div>
+    <ChartCard
+      title="Published vs. Other"
+      subtitle={`${rate} publish rate`}
+      tooltip="Share of Final photos with rating ≥ 4 synced to the gallery."
+    >
+      <Donut
+        data={[
+          { key: 'published', value: published },
+          { key: 'other', value: other },
+        ]}
+        height={220}
+        colorForKey={(k) => (k === 'published' ? PF.published : alpha(VX.neutral, 0.45))}
+        formatValue={(v) => v.toLocaleString()}
+        seriesLabel={(k) => (k === 'published' ? 'Published' : 'Other')}
+        centerLabel={rate}
+        centerSubLabel="published"
+        ariaLabel="Share of Final photos published to the gallery"
+      />
+    </ChartCard>
   )
 }
 
 // ── Storage tiles ─────────────────────────────────────────────────────────────
 
 const STORAGE_STAGES: Array<{ key: keyof StorageResponse; label: string; color: string }> = [
-  { key: 'final', label: 'Final', color: VX.photo.final },
-  { key: 'staging', label: 'Staging', color: VX.photo.staging },
-  { key: 'raws', label: 'RAWs', color: VX.photo.raws },
-  { key: 'videos', label: 'Videos', color: VX.photo.videos },
+  { key: 'final', label: 'Final', color: PF.final },
+  { key: 'staging', label: 'Staging', color: PF.staging },
+  { key: 'raws', label: 'RAWs', color: PF.raws },
+  { key: 'videos', label: 'Videos', color: PF.videos },
 ]
 
 function StorageTiles() {
@@ -340,12 +287,7 @@ function StorageTiles() {
       {STORAGE_STAGES.map(({ key, label, color }) => {
         const stage = data[key]
         return (
-          <Card
-            key={key}
-            withBorder
-            padding="sm"
-            style={{ borderColor: VX.surface.border, opacity: stage.available ? 1 : 0.45 }}
-          >
+          <Card key={key} padding="sm" style={{ opacity: stage.available ? 1 : 0.45 }}>
             <Text size="xs" c="dimmed" mb={4}>
               {label}
             </Text>
@@ -386,29 +328,25 @@ function SettingsBarChart({
   color: string
   height?: number
 }) {
-  const { ref, width } = useChartWidth()
-
   return (
-    <div ref={ref}>
-      <ChartCard title={title} tooltip={tooltip}>
-        {data.length === 0 ? (
-          <EmptyChart height={height} />
-        ) : (
-          <Bars
-            data={data}
-            width={width}
-            height={height}
-            chartId={chartId}
-            getX={(d) => d.x}
-            getValue={(d, key) => (key === 'count' ? d.count : null)}
-            positiveBars={[{ key: 'count', label: 'Count', color }]}
-            leftAxis={{ domain: 'auto' }}
-            formatValue={(v) => String(v)}
-            numTicksX={8}
-          />
-        )}
-      </ChartCard>
-    </div>
+    <ChartCard title={title} tooltip={tooltip}>
+      {data.length === 0 ? (
+        <EmptyChart height={height} />
+      ) : (
+        <Bars
+          data={data}
+          height={height}
+          chartId={chartId}
+          getX={(d) => d.x}
+          getValue={(d, key) => (key === 'count' ? d.count : null)}
+          positiveBars={[{ key: 'count', label: 'Count', color }]}
+          leftAxis={{ domain: 'auto' }}
+          formatValue={(v) => String(v)}
+          numTicksX={8}
+          ariaLabel={title}
+        />
+      )}
+    </ChartCard>
   )
 }
 
@@ -449,28 +387,28 @@ function CameraSettingsSection() {
         tooltip="Distribution of ISO sensitivity values across Final photos."
         chartId="exif-iso"
         data={isoData}
-        color={VX.photo.camera}
+        color={PF.camera}
       />
       <SettingsBarChart
         title="Aperture"
         tooltip="Distribution of aperture (f-stop) values across Final photos."
         chartId="exif-aperture"
         data={apertureData}
-        color={VX.photo.staging}
+        color={PF.staging}
       />
       <SettingsBarChart
         title="Focal Length"
         tooltip="Distribution of focal lengths across Final photos."
         chartId="exif-focal"
         data={focalData}
-        color={VX.photo.raws}
+        color={PF.raws}
       />
       <SettingsBarChart
         title="Shutter Speed"
         tooltip="Distribution of shutter speeds across Final photos."
         chartId="exif-shutter"
         data={shutterData}
-        color={VX.photo.videos}
+        color={PF.videos}
       />
     </SimpleGrid>
   )
@@ -498,7 +436,7 @@ function GeoScatter({ data, width }: { data: MapPoint[]; width: number }) {
   const toY = (lat: number) => height - PAD - ((lat - latMin) / latRange) * drawH
 
   return (
-    <svg width={width} height={height} style={{ display: 'block' }}>
+    <svg width={width} height={height} style={{ display: 'block' }} aria-label="Map of Final photos with GPS coordinates">
       <rect width={width} height={height} rx={4} fill={VX.surface.bg} />
       {data.map((p) => (
         <circle
@@ -506,9 +444,9 @@ function GeoScatter({ data, width }: { data: MapPoint[]; width: number }) {
           cx={toX(p.lng)}
           cy={toY(p.lat)}
           r={4}
-          fill={VX.photo.published}
+          fill={PF.published}
           fillOpacity={0.65}
-          stroke={VX.photo.published}
+          stroke={PF.published}
           strokeOpacity={0.9}
           strokeWidth={1}
         >
@@ -524,13 +462,13 @@ function GeoScatter({ data, width }: { data: MapPoint[]; width: number }) {
 
 function GeoScatterChart() {
   const { data, isLoading } = useQuery(analyticsQueries.map())
-  const { ref, width } = useChartWidth()
+  const { ref, width } = useChartSize()
 
   return (
     <div ref={ref}>
       <ChartCard
         title="Photo Locations"
-        subtitle={data && data.length > 0 ? `${data.length} photos with GPS` : undefined}
+        {...(data && data.length > 0 && { subtitle: `${data.length} photos with GPS` })}
         tooltip="GPS coordinates of Final photos. Full tile-map rendering is deferred — shown as a bounding-box scatter."
       >
         {isLoading ? (
@@ -538,7 +476,7 @@ function GeoScatterChart() {
         ) : !data || data.length === 0 ? (
           <EmptyChart height={200} />
         ) : (
-          <GeoScatter data={data} width={width} />
+          <GeoScatter data={data} width={width || 640} />
         )}
       </ChartCard>
     </div>
@@ -551,10 +489,10 @@ function AnalyticsPage() {
   return (
     <Stack gap="md">
       <Stack gap={4}>
-        <Title order={2} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Group gap={8}>
           <IconChartHistogram size={24} />
-          Analytics
-        </Title>
+          <Title order={2}>Analytics</Title>
+        </Group>
         <Text c="dimmed" size="sm">
           Library overview · Photos over time · Ratings · Camera settings · Storage · GPS
         </Text>

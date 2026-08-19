@@ -1,15 +1,12 @@
 /* Native-feel polish for mobile browsers and the installed (standalone) PWA.
-   Imported after Mantine styles in main.tsx so these rules win on source order.
-   Adapted from argo/apps/dashboard/src/styles/native.css. */
+   Imported after basalt-ui/styles.css in main.tsx so these rules win on source order.
+
+   Deliberately thin: the tap-highlight reset, the iOS 16px input floor and the scrollbar theming
+   all live in basalt-ui/styles.css now — duplicating them here only creates a second place to
+   drift. What remains is genuinely app-shaped: full-height roots and safe-area insets. */
 
 html {
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
   height: 100%;
-}
-
-* {
-  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -21,26 +18,23 @@ body {
   min-height: 100%;
 }
 
-.mantine-Button-root,
-.mantine-NavLink-root,
-.mantine-Burger-root {
-  -webkit-touch-callout: none;
-  user-select: none;
-}
-
-@media (max-width: 48em) {
-  .mantine-Input-input {
-    font-size: 16px;
-  }
-}
-
 @media (display-mode: standalone) {
   .mantine-AppShell-navbar {
     padding-left: max(var(--mantine-spacing-md), env(safe-area-inset-left));
   }
 
+  /* Safe-area insets, and NOTHING MORE.
+
+     The floor is the shell's own gutter (`--app-shell-padding`, 13px), never a spacing token:
+     `md` is 18px, so the old rule quietly made the installed app's right and bottom padding 5px
+     WIDER than the browser's — on a Mac, where every `env(safe-area-inset-*)` is 0 and the extra
+     bought nothing at all. That was invisible on a page of cards and very visible on `/photos`,
+     which cancels exactly one `--app-shell-padding` to bleed: the sidebar and the filmstrip
+     stopped 5px short of the window edge in the Dock PWA and reached it in a browser tab. (It is
+     also the "some ancestor box is ~7px narrower than the window" the filmstrip's right-hand
+     overshoot was written against — the overshoot is gone with it.) */
   .mantine-AppShell-main {
-    padding-bottom: max(var(--mantine-spacing-md), env(safe-area-inset-bottom));
-    padding-right: max(var(--mantine-spacing-md), env(safe-area-inset-right));
+    padding-bottom: max(var(--app-shell-padding), env(safe-area-inset-bottom));
+    padding-right: max(var(--app-shell-padding), env(safe-area-inset-right));
   }
 }

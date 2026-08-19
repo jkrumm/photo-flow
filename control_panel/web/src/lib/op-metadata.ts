@@ -23,11 +23,34 @@ export const OP_LABELS: Record<ActiveOp, string> = {
   backup: 'Backup',
 }
 
-export const BACKUP_SOURCES: { value: BackupSource; label: string }[] = [
-  { value: 'all', label: 'All sources' },
+export type BackupSourceOption = {
+  value: BackupSource
+  label: string
+  /** Shown next to the option — why you would (or would not) pick it. */
+  hint?: string
+  /** Not part of `all`; the user has to ask for it explicitly. */
+  optional?: boolean
+}
+
+/**
+ * `all` runs final → raws → videos and deliberately EXCLUDES staging.
+ *
+ * Staging is the opt-in safety mirror: between import and finalize a JPG and its ~17 MB
+ * `.photo-edit` history live on the laptop disk alone, so mirroring them makes a disk failure
+ * mid-cull survivable. It is transient by design — no trash retention, and an empty Staging is
+ * the normal end state rather than something to warn about.
+ */
+export const BACKUP_SOURCES: BackupSourceOption[] = [
+  { value: 'all', label: 'All sources', hint: 'Final + RAWs + Videos' },
   { value: 'final', label: 'Final' },
   { value: 'raws', label: 'RAWs' },
   { value: 'videos', label: 'Videos' },
+  {
+    value: 'staging',
+    label: 'Staging',
+    hint: 'Opt-in mirror of unfinalized photos — no trash retention',
+    optional: true,
+  },
 ]
 
 /** Dry-run preview field labels (DryRunModal). */
