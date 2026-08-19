@@ -1,0 +1,146 @@
+/*
+ * The two pieces of culling-screen chrome that need a pseudo-class.
+ *
+ * Both are deliberately near-invisible at rest: this screen's whole point is that the
+ * photo holds the eye, so the controls that frame it only assert themselves under the
+ * pointer. Nothing here declares a color literal — the tokens resolve per scheme.
+ */
+
+/*
+ * The screen owns the viewport, so the PAGE must not scroll.
+ *
+ * Applied to `<html>` and `<body>` for as long as the route is mounted. The layout is already
+ * pinned to `100dvh` minus the shell offsets, but `dvh` resolves to a fractional height on a
+ * window whose pixel height is odd, and half a pixel of overflow is enough to raise a bar —
+ * and basalt styles `::-webkit-scrollbar`, which drops Chrome out of macOS's overlay behaviour,
+ * so that bar is a 9px gutter that shortens the sidebar and the filmstrip rather than floating
+ * over them. Nothing here can scroll usefully anyway; every real scroll region is inside.
+ */
+.noPageScroll {
+  overflow: hidden;
+}
+
+/*
+ * The filmstrip spans the WINDOW, not the shell's content column.
+ *
+ * It is the timeline of the whole result set, so it runs under the nav rail as well — the rail
+ * has nothing below its nav items, and stopping the strip at its edge costs a screenful of
+ * frames. The margin cancels the offset `AppShell.Main` reserves for the (fixed) navbar; the
+ * z-index has to clear that navbar, which sits at 101.
+ */
+.filmstripBleed {
+  position: relative;
+  z-index: 102;
+  margin-left: calc(var(--app-shell-navbar-offset, 0rem) * -1);
+  /*
+   * No right-hand term. There used to be a second `-1 * --app-shell-padding` here, because in the
+   * installed app the strip stopped ~7px short of the window edge and exact arithmetic could not
+   * explain it. It is explained now: `native.css` was padding `AppShell.Main` with `md` (18px)
+   * instead of the shell's own 13px gutter whenever the app ran standalone, so the route's bleed
+   * cancelled 13 of 18. With that fixed, the outer column's own negative margin reaches the edge
+   * exactly, and overshooting would only cut the last frame short of nothing.
+   */
+}
+
+/*
+ * The filmstrip's own scrollbar.
+ *
+ * basalt's global thumb is a 25% ink mix, tuned to sit on a panel. This bar floats over
+ * *photographs* at the very bottom edge of the window, where a 25% capsule a few pixels tall is
+ * simply not there — the reason the first attempt read as "no scrollbar at all". macOS solves the
+ * same problem by making an overlay thumb near-opaque; so does this. It still only appears while
+ * the strip is moving (`type="scroll"`).
+ */
+.filmstripScroll :global(.mantine-ScrollArea-thumb) {
+  background-color: color-mix(in srgb, var(--vx-ink) 60%, transparent);
+}
+
+.filmstripScroll :global(.mantine-ScrollArea-scrollbar:hover) :global(.mantine-ScrollArea-thumb) {
+  background-color: color-mix(in srgb, var(--vx-ink) 80%, transparent);
+}
+
+/* Floating cluster over the stage: position counter + the one sidebar toggle. */
+.overlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  opacity: 0.4;
+  transition: opacity 140ms ease;
+}
+
+.overlay:hover,
+.overlay:focus-within {
+  opacity: 1;
+}
+
+/* Drag handle on the sidebar's leading edge. Wider than it looks — 5px is the hit
+   target; at rest it paints nothing, so the surface change stays the only separator. */
+.resizer {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 140ms ease;
+  touch-action: none;
+}
+
+.resizer:hover,
+.resizer:focus-visible,
+.resizer[data-dragging='true'] {
+  background-color: var(--vx-accent);
+}
+
+/*
+ * Collapsible section header — the title row of its card.
+ *
+ * It carries no resting fill of its own: the card around it (see `sidebar-section.tsx`) is
+ * already the object, and a filled bar inside a filled card is one frame too many. It only
+ * tints under the pointer, edge to edge, since the card clips it to its own corners.
+ */
+.sectionHeader {
+  width: 100%;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.sectionHeader:hover {
+  background-color: var(--vx-surface-subtle);
+}
+
+/*
+ * The body of an open section.
+ *
+ * A hairline under the header, so the title row reads as the card's bar rather than as the
+ * first line of its content. It sits on the scroll container and not on the padded content
+ * box, so it stays put while the body scrolls under it.
+ */
+.sectionBody {
+  /* The card's own rim, not the panel border token: `shadow-card`'s ring is a 4%-white inset,
+     so the opaque `--vx-surface-border` (#444447 on dark) drew a rule visibly heavier than the
+     card edge it sits inside — a hard line across a soft box. `--vx-divider` is the 6%-white
+     mix, which reads as the same material as the rim. */
+  border-top: 1px solid var(--vx-divider);
+}
+
+/* Disclosure chevron: rotates rather than swapping glyphs, so the two states are one move. */
+.chevron {
+  display: flex;
+  line-height: 0;
+  color: var(--vx-muted);
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.chevron[data-open='true'] {
+  transform: rotate(90deg);
+  color: var(--vx-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .resizer,
+  .sectionHeader,
+  .chevron {
+    transition: none;
+  }
+}

@@ -1,0 +1,22 @@
+/* Shell density deltas — the one place this app departs from basalt's shipped AppShell metrics.
+   Imported after basalt-ui/styles.css in main.tsx; see DESIGN.md → "App deviations".
+
+   The header is 40px, not basalt's dense 48. This panel's primary screen is a photo viewer, and
+   on it every pixel of chrome above the image is pixels the photograph does not get; the header
+   carries breadcrumbs, the status dots, the job pill and two icon buttons, whose tallest box
+   measures 30px, so 40 still clears its content with room on both sides.
+
+   Mantine writes these vars from AppShell's `header={{ height }}` prop into an injected
+   `:root` <style> block — unlayered, so a plain declaration here would only win on source order
+   (fragile) and `!important` is what actually settles it. Both vars have to move together:
+   `-height` sizes the header element, `-offset` is what `AppShell.Main` (and this app's
+   `CONTENT_HEIGHT`) reserves for it.
+
+   Scoped to the same breakpoint Mantine uses for the desktop values. Below it the shell stacks
+   the breadcrumb row under the header bar and needs its own, much taller height — leave it. */
+@media (min-width: 48em) {
+  :root {
+    --app-shell-header-height: 40px !important;
+    --app-shell-header-offset: 40px !important;
+  }
+}

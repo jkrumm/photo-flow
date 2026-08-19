@@ -59,6 +59,29 @@ RCLONE_SFTP_CONCURRENCY = 64  # Concurrent SFTP requests per transfer (speeds up
 # SSH options list for direct SSH calls (e.g. remote file count check)
 HOMELAB_SSH_OPTS = ["-T", "-c", "aes128-gcm@openssh.com", "-o", "Compression=no", "-o", "ConnectTimeout=5"]
 
+# ---------------------------------------------------------------------------
+# Culling view (control panel "Photos" screen)
+# ---------------------------------------------------------------------------
+# Roots the culling browser may read. Nothing outside this map is servable —
+# routes_photos.py resolves every incoming path against it and 400s on a miss.
+CULL_ROOTS = {
+    "final": FINAL_PATH,
+    "staging": STAGING_PATH,
+}
+
+# Derived thumbnail/preview cache. Disposable: safe to delete, regenerates on demand.
+THUMB_CACHE_PATH = Path.home() / ".photoflow" / "thumbs"
+# Long-edge pixels per tier. `grid` feeds the filmstrip, `view` the big viewer.
+THUMB_SIZES = {"grid": 320, "view": 2048}
+THUMB_QUALITY = {"grid": 78, "view": 86}
+
+# Soft-delete staging area for culled photos. Deliberately under ~/Pictures so a move
+# from Final or Staging is a same-filesystem rename (atomic, instant, no copy).
+# Leading dot keeps it out of Photos/Photomator library scans.
+TRASH_PATH = Path.home() / "Pictures" / ".photoflow-trash"
+# Days a trashed file is retained before `photoflow trash purge` may delete it.
+TRASH_RETENTION_DAYS = 30
+
 # Image processing settings
 CLARITY_ADJUSTMENT = -3
 

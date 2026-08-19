@@ -155,13 +155,22 @@ def _get_orphaned_raws() -> int:
 def _read_last_runs() -> dict:
     """Read the last terminal-run state for each op from ~/.photoflow/last_run.json.
 
-    Returns a dict mapping op keys to {"ts": ISO8601, "ok": bool} or null.
+    Returns a dict mapping op keys to {"ts": ISO8601, "ok": bool, "interrupted": bool}
+    or null. `interrupted` is written by the startup sweep for a job the previous
+    process was still running: the advisor has to be able to tell "backed up two hours
+    ago" from "started a backup two hours ago and the server died mid-transfer".
     Never raises — returns nulls for all keys on any read/parse error.
     """
     try:
         data = json.loads(_LAST_RUN_PATH.read_text())
         return {
-            k: {"ts": data[k]["ts"], "ok": data[k]["ok"]} if k in data else None
+            k: {
+                "ts": data[k]["ts"],
+                "ok": data[k]["ok"],
+                "interrupted": bool(data[k].get("interrupted", False)),
+            }
+            if k in data
+            else None
             for k in _LAST_RUN_KEYS
         }
     except Exception:

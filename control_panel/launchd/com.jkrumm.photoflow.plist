@@ -57,7 +57,22 @@
   <key>StandardErrorPath</key>
   <string>/tmp/photoflow.err</string>
 
+  <!--
+    Interactive, NOT Background. This looked like the obvious choice for an always-on daemon,
+    but `Background` puts the job in the background QoS class: on Apple Silicon that pins it to
+    the efficiency cores and throttles it (observed priority 4 vs the normal 31). Thumbnail
+    generation is CPU-bound JPEG decode, and the tax was measured at 3.5x — 291 ms in a normal
+    process became 1041 ms in the daemon, which is the difference between culling that feels
+    instant and culling that stutters. The panel is a foreground UI the user is looking at;
+    it belongs in the interactive class.
+  -->
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
+
+  <key>Nice</key>
+  <integer>0</integer>
+
+  <key>LowPriorityIO</key>
+  <false/>
 </dict>
 </plist>

@@ -7,7 +7,7 @@ including XMP, EXIF, and file information.
 
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Tuple, Union
 import os
 import json
 
@@ -33,7 +33,10 @@ class MetadataExtractor:
             image_path (Path): Path to the image file
 
         Returns:
-            Dict[str, Any]: Dictionary containing all extracted metadata
+            Dict[str, Any]: Dictionary containing all extracted metadata. Always carries
+                ``rating`` (int 0-5), ``title``, ``description``, ``label`` and
+                ``lens_model`` (empty strings when absent); ``width``/``height``/
+                ``dimensions`` are present whenever the image could be opened.
         """
         metadata = {
             "filename": image_path.name,
@@ -46,14 +49,23 @@ class MetadataExtractor:
             metadata["rating"] = 0
             metadata["title"] = ""
             metadata["description"] = ""
+            metadata["label"] = ""
+            metadata["lens_model"] = ""
             return metadata
 
         try:
             # Open the image
             img = Image.open(image_path)
 
-            # Add image dimensions
-            metadata["dimensions"] = f"{img.width}x{img.height}"
+            # Add image dimensions ("WxH" string kept for analytics; the numeric
+            # pair drives the culling view's orientation filter). These are DISPLAY
+            # dimensions — see _display_size: the raster of a rotated frame is stored
+            # sideways, and every consumer (orientation facet, thumbnails, info panel)
+            # means the upright frame.
+            width, height = MetadataExtractor._display_size(img)
+            metadata["dimensions"] = f"{width}x{height}"
+            metadata["width"] = width
+            metadata["height"] = height
 
             # Extract XMP metadata
             xmp_data = MetadataExtractor._extract_xmp_metadata(img)
@@ -72,6 +84,36 @@ class MetadataExtractor:
 
         return metadata
 
+    # EXIF Orientation (tag 0x0112) values that rotate the frame by 90°, so the stored
+    # raster is transposed relative to what the photo actually looks like.
+    _TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
+
+    @staticmethod
+    def _display_size(img: Image.Image) -> Tuple[int, int]:
+        """
+        Return the (width, height) the image is *displayed* at, honouring EXIF Orientation.
+
+        The Fuji writes portrait frames as a landscape raster plus Orientation 6/8, so
+        ``img.width``/``img.height`` describe the file, not the photo. Every consumer of
+        these numbers means the photo: the orientation facet, the info panel's "5200 x 3466",
+        and ``index/thumbs.py``, which already applies ``ImageOps.exif_transpose``. Reading
+        the tag and swapping is equivalent to ``exif_transpose`` here and skips its pixel copy.
+
+        Args:
+            img (Image.Image): Open PIL image (not yet loaded — only the header is read)
+
+        Returns:
+            Tuple[int, int]: (width, height) in display orientation
+        """
+        try:
+            orientation = img.getexif().get(0x0112)
+        except Exception:
+            orientation = None
+
+        if orientation in MetadataExtractor._TRANSPOSED_ORIENTATIONS:
+            return img.height, img.width
+        return img.width, img.height
+
     @staticmethod
     def _extract_xmp_metadata(img: Image.Image) -> Dict[str, Any]:
         """
@@ -81,7 +123,8 @@ class MetadataExtractor:
             img (Image.Image): PIL Image object
 
         Returns:
-            Dict[str, Any]: Dictionary containing XMP metadata
+            Dict[str, Any]: Dictionary containing XMP metadata (rating, title,
+                description, label)
         """
         metadata = {}
 
@@ -129,10 +172,18 @@ class MetadataExtractor:
                     # Description can be either a dict or a list of dicts
                     descriptions_to_check = [description] if isinstance(description, dict) else description
 
-                    # Search through all description blocks for title and description
+                    # Search through all description blocks for title, description and label
                     for desc_block in descriptions_to_check:
                         if not isinstance(desc_block, dict):
                             continue
+
+                        # Extract the colour label (Bridge / Photomator write xmp:Label)
+                        if 'Label' in desc_block and "label" not in metadata:
+                            label = desc_block['Label']
+                            if isinstance(label, dict) and 'x-default' in label:
+                                metadata["label"] = str(label['x-default'])
+                            else:
+                                metadata["label"] = str(label)
 
                         # Extract title
                         if 'title' in desc_block and "title" not in metadata:
@@ -149,6 +200,14 @@ class MetadataExtractor:
                                 metadata["description"] = desc['x-default']
                             else:
                                 metadata["description"] = str(desc)
+
+            # If the label wasn't in an RDF Description block, try the flat namespaces
+            if "label" not in metadata:
+                for namespace in ['xmp', 'http://ns.adobe.com/xap/1.0/']:
+                    ns_block = xmp_data.get(namespace) if isinstance(xmp_data, dict) else None
+                    if isinstance(ns_block, dict) and 'Label' in ns_block:
+                        metadata["label"] = str(ns_block['Label'])
+                        break
 
             # If title/description not found in Description, try the old method
             if "title" not in metadata or "description" not in metadata:
@@ -173,11 +232,13 @@ class MetadataExtractor:
             # Set default values for required fields
             metadata["rating"] = 0
 
-        # Ensure title and description have defaults if not found
+        # Ensure title, description and label have defaults if not found
         if "title" not in metadata:
             metadata["title"] = ""
         if "description" not in metadata:
             metadata["description"] = ""
+        if "label" not in metadata:
+            metadata["label"] = ""
 
         return metadata
 
@@ -213,6 +274,14 @@ class MetadataExtractor:
 
                 if piexif.ImageIFD.Model in exif_data.get('0th', {}):
                     metadata["camera_model"] = exif_data['0th'][piexif.ImageIFD.Model].decode('utf-8', errors='ignore').strip('\x00')
+
+                # Extract the lens (ExifIFD.LensModel, 0xA434) — Fuji writes the
+                # full lens name here, e.g. "XF16-55mmF2.8 R LM WR"
+                if piexif.ExifIFD.LensModel in exif_data.get('Exif', {}):
+                    lens = exif_data['Exif'][piexif.ExifIFD.LensModel]
+                    if isinstance(lens, bytes):
+                        lens = lens.decode('utf-8', errors='ignore')
+                    metadata["lens_model"] = str(lens).strip('\x00').strip()
 
                 # Extract camera settings
                 if piexif.ExifIFD.ISOSpeedRatings in exif_data.get('Exif', {}):
@@ -267,6 +336,10 @@ class MetadataExtractor:
 
         except Exception as e:
             print(f"Error extracting EXIF metadata: {e}")
+
+        # Ensure the lens has a default if not found
+        if "lens_model" not in metadata:
+            metadata["lens_model"] = ""
 
         return metadata
 

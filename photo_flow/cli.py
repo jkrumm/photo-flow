@@ -92,6 +92,17 @@ def import_cmd(dry_run):
         **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
     })
 
+    # Keep the panel's culling view in step with what just landed in Staging. Incremental and
+    # cheap (~1.3 s for 679 new rows against a 3 800-row index), and best-effort on purpose:
+    # the photos are already safely imported and verified, so a reindex failure must not be
+    # reported as a failed import. Mirrors `_with_reindex` on the API's import job.
+    if not dry_run and stats['photos'] > 0:
+        try:
+            from photo_flow.index.indexer import reindex
+            reindex()
+        except Exception as exc:  # noqa: BLE001 - the import itself already succeeded
+            warning(f"Index refresh failed ({exc}) - new photos stay hidden until the next reindex")
+
 
 @photoflow.command()
 @click.option('--dry-run', is_flag=True, help='Simulate finalization without moving files')
@@ -385,6 +396,148 @@ def serve(host: str, port: int) -> None:
     info(f"Starting Photo-Flow control panel at [cyan]http://{host}:{port}[/cyan]")
     info("Open [cyan]http://localhost:7717[/cyan] in your browser (or install as PWA)")
     uvicorn.run(_app, host=host, port=port)
+
+
+def _human_bytes(num_bytes: int) -> str:
+    """Format a byte count for terminal output (e.g. 1536 → '1.5 KB')."""
+    size = float(num_bytes)
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if abs(size) < 1024.0 or unit == 'TB':
+            return f"{size:.1f} {unit}" if unit != 'B' else f"{int(size)} B"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+@photoflow.group(name='trash')
+def trash_group():
+    """Manage culled photos in the soft-delete trash (restore, purge, stats)."""
+    pass
+
+
+@trash_group.command(name='list')
+@click.option('--limit', default=100, show_default=True, help='Maximum number of entries to list')
+def trash_list(limit):
+    """List trashed photos, newest first."""
+    from photo_flow import trash as trash_mod
+
+    entries = trash_mod.list_trash(limit=limit)
+
+    if not entries:
+        info("Trash is empty.")
+        return
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("ID", justify="right", style="dim")
+    table.add_column("Filename")
+    table.add_column("From", style="dim")
+    table.add_column("Rating", justify="right")
+    table.add_column("Age", justify="right")
+    table.add_column("Size", justify="right")
+    table.add_column("Edit history", justify="center")
+
+    for entry in entries:
+        rating = entry.get('rating')
+        age = f"{entry['age_days']:.1f}d"
+        age_cell = f"[yellow]{age}[/yellow]" if entry['purgeable'] else age
+        name_cell = entry['filename'] if entry['exists'] else f"[red]{entry['filename']} (missing)[/red]"
+        table.add_row(
+            str(entry['id']),
+            name_cell,
+            entry['root'],
+            "-" if rating is None else str(rating),
+            age_cell,
+            _human_bytes(entry['size']),
+            "✓" if entry.get('sidecar_trashed_path') else "-",
+        )
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[dim]Entries marked yellow are past the {trash_mod.TRASH_RETENTION_DAYS}-day retention "
+                  f"and can be purged.[/dim]\n")
+
+
+@trash_group.command(name='restore')
+@click.argument('entry_ids', nargs=-1, required=True, type=int)
+def trash_restore(entry_ids):
+    """Restore trashed photos (and their .photo-edit sidecars) by entry ID."""
+    from photo_flow import trash as trash_mod
+
+    stats = trash_mod.restore(list(entry_ids))
+
+    for message in stats['messages']:
+        warning(message)
+
+    if stats['errors'] == 0:
+        success("Restore completed successfully!")
+    else:
+        error(f"Restore completed with {stats['errors']} errors")
+
+    print_summary("Restore Results", {
+        "Photos restored": stats['restored'],
+        **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
+    })
+
+
+@trash_group.command(name='purge')
+@click.option('--days', default=None, type=int,
+              help='Minimum age in days (default: the configured retention period)')
+@click.option('--dry-run', is_flag=True, help='Show what would be purged without deleting anything')
+def trash_purge(days, dry_run):
+    """Permanently delete trashed photos past the retention period."""
+    from photo_flow import trash as trash_mod
+
+    threshold = trash_mod.TRASH_RETENTION_DAYS if days is None else days
+
+    if dry_run:
+        info("[yellow]DRY RUN:[/yellow] Simulating trash purge (no files will be deleted)")
+
+    # Always preview first — this is the one command in the trash group that destroys data.
+    preview = trash_mod.purge(older_than_days=threshold, dry_run=True)
+
+    console.print(f"[bold]Trash Purge Preview[/bold] (older than {threshold} days):")
+    console.print(f"  Entries eligible: [cyan]{preview['purged']}[/cyan]")
+    console.print(f"  Space to reclaim: [cyan]{_human_bytes(preview['bytes'])}[/cyan]")
+
+    if dry_run or preview['purged'] == 0:
+        if preview['purged'] == 0:
+            info("Nothing to purge.")
+        return
+
+    if not click.confirm(
+        f"Permanently delete {preview['purged']} trashed photo(s)? This cannot be undone.",
+        default=False
+    ):
+        console.print("[yellow]Aborted.[/yellow] No files were deleted.")
+        return
+
+    stats = trash_mod.purge(older_than_days=threshold, dry_run=False)
+
+    if stats['errors'] == 0:
+        success("Trash purge completed successfully!")
+    else:
+        error(f"Trash purge completed with {stats['errors']} errors")
+
+    print_summary("Trash Purge Results", {
+        "Entries purged": stats['purged'],
+        "Space reclaimed": _human_bytes(stats['bytes']),
+        **({"Errors encountered": stats['errors']} if stats['errors'] > 0 else {})
+    })
+
+
+@trash_group.command(name='stats')
+def trash_stats_cmd():
+    """Show trash size, entry count, and how much is past retention."""
+    from photo_flow import trash as trash_mod
+
+    stats = trash_mod.trash_stats()
+
+    print_summary("Trash Status", {
+        "Entries": stats['count'],
+        "Space used": _human_bytes(stats['bytes']),
+        "Oldest entry": stats['oldest_iso'] or "-",
+        f"Past retention ({trash_mod.TRASH_RETENTION_DAYS}d)": stats['purgeable'],
+    })
+    console.print()
 
 
 @photoflow.group()

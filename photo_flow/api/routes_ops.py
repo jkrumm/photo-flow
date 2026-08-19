@@ -239,10 +239,14 @@ async def op_import(request: Request, dry_run: bool = False):
     if dry_run:
         result = _workflow.import_from_camera(dry_run=True, reporter=NullReporter())
         return _serialize(result)
+    # Reindexed like finalize/sync-gallery. This was correct to omit before v0.4.5, when the
+    # index held Final only and an import touched nothing indexable; since Staging is indexed
+    # (root='staging'), import is precisely the op that ADDS rows. Without this the 679 photos
+    # it just landed stay invisible to the culling view until some later op happens to reindex.
     return await _enqueue_job(
         request,
         "import",
-        lambda reporter: _workflow.import_from_camera(dry_run=False, reporter=reporter),
+        _with_reindex(lambda reporter: _workflow.import_from_camera(dry_run=False, reporter=reporter)),
     )
 
 

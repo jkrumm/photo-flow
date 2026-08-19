@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PipelineRouteImport } from './routes/pipeline'
+import { Route as PhotosRouteImport } from './routes/photos'
 import { Route as OperationsRouteImport } from './routes/operations'
 import { Route as LibraryRouteImport } from './routes/library'
 import { Route as AnalyticsRouteImport } from './routes/analytics'
@@ -18,6 +19,11 @@ import { Route as IndexRouteImport } from './routes/index'
 const PipelineRoute = PipelineRouteImport.update({
   id: '/pipeline',
   path: '/pipeline',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PhotosRoute = PhotosRouteImport.update({
+  id: '/photos',
+  path: '/photos',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OperationsRoute = OperationsRouteImport.update({
@@ -46,6 +52,7 @@ export interface FileRoutesByFullPath {
   '/analytics': typeof AnalyticsRoute
   '/library': typeof LibraryRoute
   '/operations': typeof OperationsRoute
+  '/photos': typeof PhotosRoute
   '/pipeline': typeof PipelineRoute
 }
 export interface FileRoutesByTo {
@@ -53,6 +60,7 @@ export interface FileRoutesByTo {
   '/analytics': typeof AnalyticsRoute
   '/library': typeof LibraryRoute
   '/operations': typeof OperationsRoute
+  '/photos': typeof PhotosRoute
   '/pipeline': typeof PipelineRoute
 }
 export interface FileRoutesById {
@@ -61,14 +69,28 @@ export interface FileRoutesById {
   '/analytics': typeof AnalyticsRoute
   '/library': typeof LibraryRoute
   '/operations': typeof OperationsRoute
+  '/photos': typeof PhotosRoute
   '/pipeline': typeof PipelineRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/analytics' | '/library' | '/operations' | '/pipeline'
+  fullPaths:
+    | '/'
+    | '/analytics'
+    | '/library'
+    | '/operations'
+    | '/photos'
+    | '/pipeline'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/analytics' | '/library' | '/operations' | '/pipeline'
-  id: '__root__' | '/' | '/analytics' | '/library' | '/operations' | '/pipeline'
+  to: '/' | '/analytics' | '/library' | '/operations' | '/photos' | '/pipeline'
+  id:
+    | '__root__'
+    | '/'
+    | '/analytics'
+    | '/library'
+    | '/operations'
+    | '/photos'
+    | '/pipeline'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -76,6 +98,7 @@ export interface RootRouteChildren {
   AnalyticsRoute: typeof AnalyticsRoute
   LibraryRoute: typeof LibraryRoute
   OperationsRoute: typeof OperationsRoute
+  PhotosRoute: typeof PhotosRoute
   PipelineRoute: typeof PipelineRoute
 }
 
@@ -86,6 +109,13 @@ declare module '@tanstack/react-router' {
       path: '/pipeline'
       fullPath: '/pipeline'
       preLoaderRoute: typeof PipelineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/photos': {
+      id: '/photos'
+      path: '/photos'
+      fullPath: '/photos'
+      preLoaderRoute: typeof PhotosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/operations': {
@@ -124,6 +154,7 @@ const rootRouteChildren: RootRouteChildren = {
   AnalyticsRoute: AnalyticsRoute,
   LibraryRoute: LibraryRoute,
   OperationsRoute: OperationsRoute,
+  PhotosRoute: PhotosRoute,
   PipelineRoute: PipelineRoute,
 }
 export const routeTree = rootRouteImport

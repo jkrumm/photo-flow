@@ -20,7 +20,7 @@ from photo_flow.config import (
     HOMELAB_USER, HOMELAB_HOST, HOMELAB_SSD_FINAL_PATH, HOMELAB_HDD_RAWS_PATH,
     HOMELAB_HDD_VIDEOS_PATH, HOMELAB_TRASH_PATH, HOMELAB_HDD_TRASH_PATH, HOMELAB_SSD_TRASH_PATH, RSYNC_EXCLUDE_PATTERNS,
     RCLONE_TRANSFERS, RCLONE_SSH_CIPHER, RCLONE_SFTP_CONCURRENCY, HOMELAB_SSH_OPTS,
-    HOMELAB_SSD_STAGING_PATH, EDIT_SIDECAR_SUFFIX
+    HOMELAB_SSD_STAGING_PATH, EDIT_SIDECAR_SUFFIX, TRASH_PATH
 )
 from photo_flow.file_manager import FileManager, is_valid_image_file, scan_for_images
 from photo_flow.metadata_extractor import MetadataExtractor
@@ -32,23 +32,53 @@ from photo_flow.timestamp_renamer import generate_timestamped_filename, extract_
 logger = logging.getLogger(__name__)
 
 
+def _trash_keep_bases() -> set:
+    """
+    Correlation bases of every JPG currently sitting in the soft-delete trash.
+
+    A trashed photo is restorable for TRASH_RETENTION_DAYS, so its RAW is *not* an orphan
+    yet — see compute_raw_keep_bases. Truth is the filesystem, not the `trash` table: the
+    entry directory holding the file is what makes a restore possible, so a row without
+    files protects nothing and files without a row are still worth protecting. Entries are
+    one directory deep (TRASH_PATH/<entry-key>/<original filename>), hence rglob.
+
+    Returns:
+        Set of correlation bases, empty when the trash does not exist or holds no JPGs.
+    """
+    if not TRASH_PATH.exists():
+        return set()
+    return {
+        correlation_base(f.name)
+        for f in TRASH_PATH.rglob('*')
+        if f.suffix.upper() == '.JPG' and f.is_file() and is_valid_image_file(f)
+    }
+
+
 def compute_raw_keep_bases() -> set:
     """
     Bases of every JPG we still have a stake in, used to decide which local RAWs are orphaned.
 
-    A RAW is orphaned only if its base matches no JPG in *either* Final (finalized keepers)
-    *or* Staging (imported, not yet finalized/rated). Matching is Photomator-suffix tolerant
-    (see correlation_base) so DSCF0770_2.jpg protects DSCF0770.RAF. Excluding Staging would
-    delete the RAW backups of photos still awaiting finalize — irreversible data loss.
+    A RAW is orphaned only if its base matches no JPG in Final (finalized keepers), Staging
+    (imported, not yet finalized/rated) *or* the trash (culled but still restorable).
+    Matching is Photomator-suffix tolerant (see correlation_base) so DSCF0770_2.jpg protects
+    DSCF0770.RAF.
+
+    All three roots are load-bearing and each was a real data-loss bug:
+      * Excluding Staging deletes the RAW backups of photos still awaiting finalize.
+      * Excluding the trash deletes the RAW of a photo the user can still restore — and
+        finalize's step 4 unlinks orphans with no preview and no confirmation, so the very
+        next `photoflow finalize` after a culling session would do it silently. The RAW
+        only becomes an orphan once the trash entry is purged, which is exactly right.
 
     Returns:
-        Set of correlation bases (e.g. {"DSCF0430", ...}) for all Final + Staging JPGs.
+        Set of correlation bases (e.g. {"DSCF0430", ...}) for all Final + Staging + trashed JPGs.
     """
     keep = set()
     if FINAL_PATH.exists():
         keep.update(correlation_base(j.name) for j in scan_for_images(FINAL_PATH, '.JPG'))
     if STAGING_PATH.exists():
         keep.update(correlation_base(j.name) for j in scan_for_images(STAGING_PATH, '.JPG'))
+    keep.update(_trash_keep_bases())
     return keep
 
 # ---------------------------------------------------------------------------
@@ -626,8 +656,10 @@ class PhotoWorkflow:
 
         # Step 4: Clean up orphaned local RAW files
         if RAWS_PATH.exists() and FINAL_PATH.exists():
-            # Keep RAWs whose JPG is in Final OR still in Staging (awaiting finalize),
-            # Photomator-suffix tolerant — see compute_raw_keep_bases.
+            # Keep RAWs whose JPG is in Final, still in Staging (awaiting finalize), or in
+            # the trash (culled but restorable). Photomator-suffix tolerant — see
+            # compute_raw_keep_bases. This step deletes with no preview and no confirmation,
+            # so the keep-set is the only thing standing between a cull and a lost RAW.
             keep_bases = compute_raw_keep_bases()
             raw_files = [raf for raf in RAWS_PATH.glob('*.RAF') if is_valid_image_file(raf)]
             orphaned_raws = [raw_file for raw_file in raw_files if correlation_base(raw_file.name) not in keep_bases]
@@ -692,8 +724,9 @@ class PhotoWorkflow:
 
         reporter.log("info", "Scanning for orphaned RAW files...")
 
-        # Keep RAWs whose JPG is in Final OR still in Staging (imported, awaiting finalize).
-        # Photomator-suffix tolerant — see compute_raw_keep_bases.
+        # Keep RAWs whose JPG is in Final, still in Staging (imported, awaiting finalize),
+        # or in the trash (culled but restorable). Photomator-suffix tolerant — see
+        # compute_raw_keep_bases.
         keep_bases = compute_raw_keep_bases()
 
         # Get all RAFs in the RAWs folder
