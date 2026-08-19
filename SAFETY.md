@@ -52,6 +52,30 @@ This project implements a **safety-first architecture** designed to prevent data
 - Metadata verification after processing
 - File system validation before destructive operations
 
+### 9. Soft Delete — Culling Never Unlinks (`trash.py`)
+Culling in the control panel is the only routine operation that removes a photo from the pipeline,
+so it is the one path that must be reversible:
+
+- **Move, never unlink.** The JPG and its `.photo-edit` edit history are renamed into
+  `~/Pictures/.photoflow-trash`. That location is deliberate: it shares a filesystem with both
+  Final and Staging, so the move is an atomic rename rather than a copy that can half-finish.
+- **The sidecar always travels.** `.photo-edit` is the only copy of Photomator's edit history —
+  it is never left behind and never deleted on its own.
+- **Move first, record second.** The DB row is written only after the files have landed. A failed
+  insert moves them back, and if that move-back itself fails the failure is reported rather than
+  papered over. An entry directory with no row (a kill between the two steps) is **adopted** on
+  the next `trash list` — never reaped.
+- **A trashed photo protects its RAW.** `compute_raw_keep_bases()` unions the trash into the
+  keep-set, so `finalize` step 4 — which unlinks orphaned RAWs with no preview and no
+  confirmation — cannot destroy the RAW of a photo you can still restore. The RAW becomes an
+  orphan only once the entry is purged.
+- **Retention keys off `trashed_at`, never file mtime.** A photo keeps its capture-time mtime, so
+  an mtime sweep would purge a freshly-culled batch of old photos immediately. `purge` refuses to
+  touch anything inside the retention window and prompts before deleting.
+
+Derived data has no such protection and needs none: `~/.photoflow/thumbs` and `~/.photoflow/index.db`
+are both rebuildable from the photos themselves.
+
 ## Implementation Examples
 
 ### Safe File Copy (`file_manager.py`)

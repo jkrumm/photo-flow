@@ -8,6 +8,20 @@ A personal CLI tool for managing Fuji X-T4 camera photos/videos with a staging w
 
 A local-only web UI lives at `http://localhost:7717` — pipeline status, operation triggers with live progress, and analytics over the photo library.
 
+Built on [basalt-ui](https://www.npmjs.com/package/basalt-ui) over Mantine 9: shared theme and
+`--vx-*` token system, `BasaltShell`, visx charts, and a ⌘K command palette for navigation.
+Press ⌘B to collapse the sidebar.
+
+Jobs run in the always-on daemon and are recorded durably, so closing the panel — or restarting
+the service — never loses track of one:
+
+- **Job history** on the Pipeline screen lists what actually ran, with outcome, duration and counts.
+- A job the server was **still running when it stopped** (crash, logout, `make reload`) comes back
+  marked `interrupted` instead of vanishing, and the pipeline advisor stops treating its timestamp
+  as a completed run.
+- A job that **finishes while the panel is shut** still lands in the notification bell the next time
+  you open it.
+
 ### Build & run
 
 ```bash
@@ -28,6 +42,31 @@ launchctl load ~/Library/LaunchAgents/com.jkrumm.photoflow.plist
 ```
 
 To uninstall: `launchctl unload ~/Library/LaunchAgents/com.jkrumm.photoflow.plist && rm ~/Library/LaunchAgents/com.jkrumm.photoflow.plist`
+
+### Picking up changes
+
+```bash
+make reload           # rebuild the SPA, restart the daemon, verify the live endpoints
+make reload-if-stale  # the same, but a no-op when nothing changed since the last one
+```
+
+`reload-if-stale` is wired to the Claude Code `Stop` hook (`.claude/settings.json` — the one file
+under `.claude/` that is version-controlled), so an agent turn that touches the panel or the Python
+core ends with the running Mac app already serving it. It is cheap to call: ~50 ms when nothing
+changed, ~2 s for a Python-only change (daemon restart, SPA bundle untouched), ~10 s for a panel
+change (full rebuild). The stamp is written only on success, so a failed build retries next turn
+rather than declaring itself deployed.
+
+Both halves are required after any panel or API change: rebuilding `dist/` alone does not reload
+the Python process, so new API routes stay invisible until the daemon restarts. `make reload`
+prints a live check afterwards — the API line must read `application/json`. If it reads
+`text/html`, the route is missing and FastAPI's SPA catch-all answered instead.
+
+The Dock PWA refreshes itself. Its service worker installs the new build in the background and
+claims the page; `main.tsx` listens for `controllerchange` and reloads, so an open window picks the
+change up on its own within a few seconds. Without that listener the window kept serving the
+precached old bundle indefinitely — a shipped change was simply never visible in the installed app,
+only in a browser tab you happened to reload twice.
 
 ### Optional: HTTPS via Caddy
 
@@ -50,6 +89,8 @@ Then `caddy-reload` and commit in dotfiles.
 - Backup RAW (.RAF) files
 - Copy videos (.MOV) to external SSD
 - Sync high-rated photos (rating ≥ 4) to a gallery with intelligent file handling
+- Cull in the control panel — browse Final and Staging full-screen, filter on any EXIF field, rate
+  with the number keys, and soft-delete to a restorable trash
 - Hash-based duplicate detection and post-copy verification
 - Dry-run mode for import, cleanup, and sync-gallery
 - Confirmation prompts for destructive actions
@@ -186,6 +227,55 @@ Add `--dry-run` to preview without sending data.
 photoflow backup --dry-run
 photoflow backup
 ```
+
+### `photoflow trash`
+Manages the soft-delete trash that the control panel's Photos screen writes to. Culling never
+deletes: the JPG and its `.photo-edit` edit history are **moved** to `~/Pictures/.photoflow-trash`
+(same filesystem as Final and Staging, so the move is an instant, atomic rename).
+
+- **A trashed photo keeps its RAW.** While the entry exists, `finalize` and `cleanup` both treat
+  the matching `.RAF` as a keeper. It becomes an orphan only once you purge the entry.
+- **Retention is 30 days**, measured from when the photo was trashed — not from the file's date.
+- `purge` never touches an entry that is still inside the retention window, and asks before
+  deleting anything.
+
+```bash
+photoflow trash stats                  # count, size, how much is past retention
+photoflow trash list                   # newest first, with age and rating
+photoflow trash restore 42 43          # put them back where they came from
+photoflow trash purge --dry-run        # preview what 30-day retention would release
+photoflow trash purge --days 60
+```
+
+## The Photos screen (culling)
+
+Open the control panel (`photoflow serve` → http://127.0.0.1:7717) and pick **Photos** under
+Workflow. It replaces a Bridge culling session:
+
+- **One sidebar, on the right**, and nothing in it but four collapsible cards: **Folders**,
+  **Filters**, **Info** (stars, colour label, EXIF) and **View**. Each remembers whether you left
+  it open, caps at 44% of the window height and scrolls inside itself, so opening one never pushes
+  the others away — and since they are cards on the page rather than slices of a panel, the chrome
+  ends where its content does. Drag the sidebar's left edge to resize it. The only thing floating
+  over the image is the position counter and the button that hides the sidebar.
+- **Everything else is the photograph.** The screen runs edge to edge — no page gutter, no page
+  scrollbar — and the filmstrip spans the full window width underneath, nav rail included, so the
+  timeline is as long as the window is wide.
+- **Browse** Final and Staging side by side, with a date tree (year → month) for jumping around.
+- **Filter** on anything the EXIF carries — rating, ISO, aperture, shutter, focal length, camera,
+  lens, colour label, filename. Each filter shows live counts, and an option that would return
+  nothing is never offered.
+- **Rate** with `0`–`5`. The star is written straight into the JPG as `XMP-xmp:Rating` via
+  exiftool, so `sync-gallery` and Immich pick it up with no extra step. Note that Photomator is
+  the other writer of that tag — rate in one place per photo, not both.
+- **Step** with `←`/`→` (or `j`/`k`). Neighbours are pre-rendered and pre-decoded, so the next
+  frame is already on screen; a warm thumbnail serves in ~2 ms.
+- **Cull** with `⌫` — the photo moves to trash and the view advances. `⌘Z`, or the Undo in the
+  toast, puts it back.
+- `i` toggles the sidebar, `f` the filmstrip, `z` 1:1 zoom.
+
+Thumbnails are cached under `~/.photoflow/thumbs`. That directory is derived and disposable —
+deleting it costs nothing but regeneration.
 
 ## Configuration
 

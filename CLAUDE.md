@@ -116,10 +116,24 @@ GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/s
 **Control panel (v0.4.0+):**
 - **FastAPI 0.115+ / uvicorn / sse-starlette** — API server (`photo_flow/api/`)
 - **SQLite** (stdlib) — metadata index at `~/.photoflow/index.db`
-- **Vite 8 + React 19 + TanStack Router/Query + Mantine 9** — SPA (`control_panel/web/`)
-- **framer-motion** — animated pipeline hero
-- **visx** (`@argo/charts` vendored) — analytics charts with Blueprint token system
+- **Vite 8 + React 19 + TanStack Router/Query** — SPA (`control_panel/web/`)
+- **basalt-ui 1.13** over **Mantine 9.5** — theme, `BasaltShell`, visx charts, `--vx-*` tokens,
+  notifications, ⌘K command palette. **Not a component grab-bag: it owns the identity.** Read
+  `control_panel/web/DESIGN.md` and `control_panel/web/.claude/rules/basalt-*.md` before touching UI.
+- **motion** (`motion/react`, never raw `framer-motion`) — animated pipeline hero
 - Port: `127.0.0.1:7717` (localhost only, never exposed)
+
+**basalt-ui house rules that bite (all mechanically enforced by `npm run lint`):**
+- No raw `#hex` / `rgb()` / `rgba()` anywhere in `src/` — colors come from `VX.*`
+  (`basalt-ui/tokens`), `alpha(token, a)`, or the app's series map `src/lib/series.ts` (the one
+  guard-exempt file, and it uses basalt's own `p(BP.*)` families rather than literals).
+- Never `withBorder` on a `Card`/`Paper`, never an inline `border`/`borderRadius`/`boxShadow`/
+  `backgroundColor` — depth is `shadow-card` (panels) / `shadow-raised` (controls), ring baked in.
+- `@visx/*` may only be imported inside a `charts/` dir; everywhere else compose `basalt-ui/charts`.
+- Motion timings come from `MOTION_DURATION` / `MOTION_SPRING` / `MOTION_EASE_STANDARD`.
+- After a basalt-ui upgrade run `bunx basalt-ui sync` to refresh the managed rules + CLAUDE.md block.
+  `.claude/` is gitignored in this repo, so those rules are **regenerated, not committed** —
+  `.basalt/manifest.json` is the committed record of what version they came from.
 
 ### Control Panel Architecture
 
@@ -131,10 +145,16 @@ photo_flow/ (Python core — unchanged)
        ├── photo_flow/api/ (FastAPI — QueueReporter → SSE)
        │     app.py · routes_status · routes_ops · routes_jobs · routes_analytics
        │     jobs.py (asyncio.to_thread + single-flight Lock)
+       │     job_store.py (durable job records — outlive a restart; v0.4.10)
        │     Serves static control_panel/web/dist/ + SPA fallback
        └── photo_flow/index/ (SQLite metadata cache at ~/.photoflow/index.db)
 
 control_panel/web/       Vite React SPA (build → dist/ served by FastAPI)
+  src/main.tsx           BasaltProvider → BasaltOverlays (⌘K) → QueryClient → Router
+  src/routes/__root.tsx  BasaltShell (sidebar/mobile-nav/breadcrumbs/globalActions)
+  src/lib/series.ts      the app's series dictionary — the only place a color is declared
+  src/lib/commands.ts    ⌘K registry: navigation + view toggles ONLY, never a pipeline op
+  DESIGN.md              app-level design law (deltas over the shipped basalt-* rules)
 control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7717)
 ```
 
@@ -143,6 +163,8 @@ control_panel/launchd/   LaunchAgent plist (KeepAlive, RunAtLoad, localhost:7717
 
 **Job lifecycle:** `POST /ops/{name}?dry_run=true` → preview dict → UI confirm modal →
 `POST /ops/{name}` → SSE stream at `GET /events/{job_id}` → terminal result at `GET /jobs/{job_id}`.
+Every transition is also mirrored to the `jobs` table, so `GET /jobs/history` still answers after a
+restart that empties `GET /jobs` — and marks whatever was in flight `interrupted` (v0.4.10).
 
 **Serving:** `photoflow serve` runs uvicorn; FastAPI mounts the built SPA at `/` with a catch-all
 SPA fallback after all `/api`-prefixed routes are registered. Dev: Vite on port 7718 proxies
@@ -1032,13 +1054,481 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.3
+**Version**: 0.4.12
 **Last Updated**: August 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.12 - Reject Flag: Three-State Culling, Trash Demoted to a Batch Step (August 2026)
+
+**Prototype work for Shutterflow** (see `~/SourceRoot/shutterflow/docs/decisions/0004`) — the
+findings are the deliverable; the code is how they were obtained. `x` (and `Backspace`/`Delete`,
+rebound) now writes `XMP-xmp:Rating = -1` instead of moving the file to the trash.
+
+1. **`-1` is a third cull state, not a low star count** (`REJECTED` in `routes_photos.py` and
+   `lib/photos.ts`). Unrated (0 / tag absent), rated (1–5) and rejected (-1) are independent
+   answers to "have I judged this yet?", which the old 0–5-only model could not express. It is the
+   XMP spec's own reject value, so it is written literally — unlike rating 0, which still *clears*
+   the tag. `RatingRequest` widened to `ge=-1`; the Pillow reader already passed `-1` through
+   unclamped, so nothing else in the read path changed.
+2. **Rejecting moves nothing.** That is the entire point: a cull pass is now a sequence of
+   metadata writes, reversible by pressing the key again, and only the deliberate
+   **`POST /api/photos/rejects/purge`** touches the filesystem — behind a count, a confirm modal
+   and a `dry_run`. "Purge" still only means trash; `photoflow trash restore` works afterwards.
+   Per-photo trash-on-keypress (`trashSelected`/`trashMutation`) is **deleted**, not hidden.
+   - The purge re-reads its targets from the **index**, not from a client-supplied list, so it
+     acts on the judgement as it stands at click time. Every path is still re-validated through
+     `_resolve_in_roots` + `exists()` — "the DB said so" is not a reason to hand a path to a move,
+     and a lagging index can then only fail to offer a purge, never direct one at the wrong file.
+3. **Hide-by-default lives in the `rating` dimension of `_clauses`, deliberately.** The facet
+   endpoint recomputes each dimension with its own filter excluded, so `exclude="rating"` drops
+   the reject-exclusion too — which is exactly right: the rating facet reports a truthful `-1`
+   count while every other facet stays reject-free. An explicit `rating=-1` also wins over the
+   default, so asking for rejects is never vetoed by the view preference.
+4. **A rejected frame dims but is NOT desaturated** (`photo-filmstrip.tsx`). Greyscale is correct
+   for a *trashed* photo — it has left the library — and wrong for a rejected one: colour is half
+   of what is being judged, and an un-reject decided against a grey thumbnail is decided blind.
+   The ✕ mark, not the dimming, is what makes it unambiguous; at strip size a dim frame alone
+   reads as "still loading".
+5. **UI:** new **Cull** sidebar section (reject count, "Show rejected" switch, the purge button),
+   open by default because it holds the only control that moves a culled photo.
+   `photos-show-rejected` / `photos-section-cull` are new persisted keys.
+
+**Verified against the live library, not just fixtures:** a real Final JPG was rejected through
+the API; the file on disk read back `-1`, facets moved 3797 → 3796 with `ratings['-1'] = 1`, the
+default list dropped it, `include_rejected=true` returned it, and the file was still on disk.
+445 tests (was 434).
+
+**Two things left unverified**, both needing something this session could not reach: whether
+Photomator displays `-1` sanely and preserves it across a re-edit (GUI), and whether Immich reads
+it (the `.env` API key is scoped to library-scan only — `asset.read` is denied).
+
+**Bonus survey, same session:** index rating vs. a live exiftool read across all **2 364** Final
+JPGs — **0 disagreements**, 27 files with no `Rating` tag at all. The Photomator-vs-us conflict
+risk recorded in `0004` is prospective, not an existing mess.
+
+### v0.4.11 - Shell Chrome: 40px Header, and the Standalone Gutter That Ate the Right Edge (August 2026)
+**Frontend only — no Python change.** Three edges of the culling screen, reclaimed.
+
+1. **The shell header is 40px** (`src/styles/shell.css`, new, imported after `native.css`). basalt's
+   dense default is 48; the panel's primary screen is a photo viewer, where chrome above the image
+   is space the photograph does not get. The header's tallest content box (the global-actions
+   group) measures 30px, so 40 clears it with room on both sides. Mantine writes
+   `--app-shell-header-{height,offset}` into an injected **unlayered `:root` block**, so the
+   override needs `!important` — a plain declaration would only win on source order. Both vars move
+   together: `-height` sizes the element, `-offset` is what `AppShell.Main` and this route's
+   `CONTENT_HEIGHT` reserve. Scoped to `min-width: 48em`, since below it the shell stacks the
+   breadcrumb row and legitimately needs its own taller value. Recorded in `DESIGN.md`.
+2. **`native.css` was padding the installed app WIDER than the browser.** Its standalone rule used
+   `max(var(--mantine-spacing-md), env(safe-area-inset-*))` — and `md` is 18px against the shell's
+   own 13px gutter, on a Mac where every safe-area inset is 0. Invisible on a page of cards;
+   very visible on `/photos`, which cancels exactly one `--app-shell-padding` to bleed, so the
+   sidebar and the filmstrip stopped 5px short of the window edge in the Dock PWA and reached it in
+   a browser tab. The floor is now `--app-shell-padding`, so standalone padding equals the normal
+   gutter and a bleeding route cancels it exactly.
+3. **The filmstrip's right-hand overshoot is gone** — both `.filmstripBleed`'s second
+   `margin-right` and `photo-filmstrip.tsx`'s `RIGHT_BLEED` term. v0.4.8 added them against a
+   ~7px shortfall it could only guess at ("a reserved scrollbar gutter is the likeliest culprit");
+   item 2 is what it actually was. With the cause fixed, the outer column's own negative margin
+   lands on the edge and both ends of the track carry a plain `EDGE`.
+4. **Sidebar cards ride the window edge** — the section stack's inset is 4px (was 8), gap 6 (was
+   8). Combined with item 2 the cards sit ~9px further right.
+
+### v0.4.10 - Durable Job Records; Interrupted-Job Detection; Notification Coverage (August 2026)
+
+Job records lived **only** in `JobManager._jobs`, an in-memory dict. A restart — crash, logout,
+`make reload` — vaporised every one of them: a 22 GB backup that was 80 % done did not fail, it
+stopped existing, and `last_run.json` was left implying the op had never run at all. Three gaps,
+one durable record.
+
+1. **`photo_flow/api/job_store.py`** (new) mirrors every job transition to a `jobs` table in
+   `~/.photoflow/index.db` (**schema v3** — a new table, so `CREATE TABLE IF NOT EXISTS`; any
+   later column on it must use the PRAGMA-guarded `ALTER TABLE` idiom of `_migrate_photos_v2`).
+   Columns: op, status, seq, queued/started/finished timestamps, JSON result, error, `announced`.
+   Three writes per job (admitted / started / terminal), pruned to 500 rows.
+   - **Every write is best-effort** — each entry point swallows and DEBUG-logs its own failure, the
+     same contract as `_persist_last_run`. The durable record is a convenience; the verified-copy
+     file operations underneath are not, and a jobs-table problem must never be able to fail or
+     stall one. `test_store_failure_does_not_break_the_job` pins it against an unwritable path.
+   - **Events are NOT persisted.** The per-job SSE log stays in memory: large, only useful while
+     someone is watching, and its terminal summary is already in `result`.
+   - Writes happen on the **event-loop thread**, so `get_db()` gained a `timeout` parameter and the
+     store passes 2 s. sqlite3's default is 5 s, which is 5 s of every SSE stream in the panel
+     stalling behind a long indexer transaction.
+   - Ordering is by **rowid** (insertion order), never `seq` — `JobManager._seq` restarts at 0 in
+     each new process, so it orders within a run and lies across restarts.
+2. **Startup reconciliation** (`jobs.sweep_interrupted_jobs()`, called from `app.py`'s lifespan
+   *before* the manager exists). A fresh process owns no jobs, so any row still `queued` or
+   `running` is by definition residue of a dead one; each becomes **`interrupted`**. The two are
+   kept distinguishable through the error text, because only `running` actually touched the disk.
+   - **It also corrects `last_run.json`** — but only for jobs that were *running*. Without that the
+     file still holds whatever the previous successful run wrote, and the advisor reads a backup
+     that died mid-transfer as "backed up 3 days ago, fine". A job that was only ever queued is
+     left alone: nothing ran, so nothing about the last run changed.
+   - `interrupted` is a **seventh status that no live `Job` object can reach** — it is assigned to
+     rows whose process no longer exists. It exists in the persisted record and the API types only.
+3. **The notification bell is now a record of what happened, not of what was watched.** Jobs run
+   server-side, so one finishing with the panel shut produced no toast and no history entry.
+   `announced` is the coverage flag: `GET /jobs/history?unannounced=true` feeds a catch-up sweep in
+   `JobController` that replays those outcomes into the notification history on mount, then
+   `POST /jobs/history/ack`s them. The live completion seam acks too, so a job watched in real time
+   is never re-announced on the next reload.
+   - The catch-up path is deliberately **quieter than the live one** — no chime, no OS notification.
+     The event is over, several may arrive at once, and a burst of chimes for things that finished
+     hours ago is noise.
+   - Ack failure is swallowed on purpose: replaying the whole batch next load is worse than losing
+     one bell entry.
+4. **`usePipelineAdvisor` no longer buys staleness credit with a timestamp from a run that did not
+   finish.** The backup rule read age only, so an interrupted run — stamped with the moment the
+   sweep detected it — would have read as "backed up 2 minutes ago" and then gone quiet for three
+   days. `ok === false` now forces the advice, with "last backup interrupted — the server stopped
+   mid-transfer" as the detail (`last_runs.*` gained an optional `interrupted` flag,
+   OPTIONAL not just nullable, per the long-daemon/fresh-SPA rule above).
+5. **UI:** `JobHistoryPanel` (collapsible, on the Pipeline screen below the hero) lists the durable
+   record — op, outcome, relative time, duration, headline counts — and is the one surface that
+   still shows something after a restart, where `GET /jobs` is empty by design. `JobStatusBadge` was
+   extracted from `JobQueuePanel` and is shared by both, so the live queue and the history can't
+   drift into two vocabularies for the same state.
+6. **`tests/conftest.py`** (new) points the job store at a per-test database. Its default is the
+   developer's **live** `~/.photoflow/index.db`; without this fixture every test that enqueues a job
+   would append history rows to a database holding thousands of real photo rows.
+
+**Verified live, not just under pytest:** a real `backup:final` was started, `photoflow service
+restart` was issued 8 s into the transfer, and after the restart `GET /jobs` was empty (the old
+behaviour, unchanged) while `GET /jobs/history` held the job as `interrupted` with its start/finish
+stamps and `last_runs.backup` read `ok: false, interrupted: true`. The re-run then completed
+normally (2 526 files, Immich rescan triggered) and recorded `done`. 414 → 434 tests.
+
+### v0.4.9 - Import Reindexes; Viewer Cache Releases What It Evicts (August 2026)
+
+1. **`import` now reindexes** (`api/routes_ops.py`, `cli.py`). It was the only mutating op not
+   wrapped in `_with_reindex`. That was *correct* before v0.4.5 — the index held Final only, so an
+   import touched nothing indexable — but since Staging is indexed (`root='staging'`), import is
+   precisely the op that ADDS rows. Observed live: 679 freshly imported photos stayed invisible to
+   `/photos` until a manual `POST /index/refresh`. Both paths now reindex on a successful non-dry
+   run; the CLI's is best-effort (`try/except` + warning), because the files are already copied and
+   hash-verified and a reindex failure must not report a successful import as failed. Incremental
+   and cheap — **1.3 s for 679 new rows** against a 3 800-row index.
+2. **The viewer's decoded-frame LRU aborts what it evicts** (`routes/photos.tsx`). Eviction was
+   `lru.delete(url)`, which drops only *our* reference: an entry evicted while its request was
+   still in flight held one of the browser's six connections to completion and then decoded a
+   ~450 KB `view` frame nobody was waiting for. Holding an arrow key evicts exactly those — the
+   ring refills faster than a cold frame lands. Measured over a 75-frame walk at 25 ms/step,
+   **~36 of 75 frames were evicted mid-flight**, and clearing `src` on eviction cut bytes
+   transferred **30.4 MB → 16.2 MB (-47 %)**. This is the same abort `PhotoViewer` already
+   performed on its own superseded loads; the LRU simply never got it.
+3. **The LRU is released on unmount.** Leaving `/photos` stranded up to `LRU_CAP` decoded frames
+   until the component graph was collected. Now aborted and cleared in the effect teardown.
+4. **`LRU_CAP`'s cost is documented in measured numbers.** The old comment read "a few tens of MB",
+   which is the *encoded* size; a `view` frame is a ~450 KB JPEG but a 1365x2048 **bitmap** once
+   decoded. Measured (Chrome 151, 32 GB): 24 held frames move renderer RSS **~116 MB**, ~4.8 MB
+   resident each. The cap is unchanged — read any future change to it as tens of megabytes.
+
+**Memory profile, measured, for anyone tuning this next.** Server: **55 MB idle**, ~138 MB peak
+during a 4-worker `warm` — bounded, no leak across a 200-frame walk. Browser: baseline ~210 MB,
+**+116 MB** for a full 24-frame LRU. Growth beyond the LRU is Chrome's own HTTP memory cache
+holding the encoded `view` JPEGs of every frame stepped past (~450 KB each, `Cache-Control:
+immutable`) — **not reachable from JS and not a leak in this code**; it is reclaimed under
+pressure. Don't chase it by shrinking `LRU_CAP`.
+
+### v0.4.8 - Culling View: Full-Bleed Stage, Edge-to-Edge Filmstrip (August 2026)
+**Frontend only — no Python change.** v0.4.7 collapsed three edges of chrome into one; this
+reclaims the space the *shell* was still holding around it.
+
+1. **The route bleeds through `AppShell.Main`'s gutter** (`routes/photos.tsx`). Every other screen
+   in the panel is a page of cards and wants the shell's 13px padding; this one is a viewer, where
+   the same padding is dead surface on four sides framing the only thing the screen exists to show.
+   Mantine pads Main with `{header,footer,navbar}-offset + --app-shell-padding`, so a negative
+   margin of exactly `--app-shell-padding` cancels the gutter and **leaves the offsets** — the
+   content still clears the header, the nav rail and the mobile footer. `CONTENT_HEIGHT`
+   correspondingly stops subtracting the two gutters it just reclaimed. Do not "simplify" it to a
+   plain `100%`: percentage height does not resolve against Main's `min-height: 100dvh`.
+   - **The width stays `auto` — do not add `calc(100% + var(--app-shell-padding) * 2)`.** It is
+     arithmetically identical and wrong in practice: it resolves the container width and the two
+     gutters separately and adds them, so on a display running a fractional scale factor (any
+     "More Space" Mac) the roundings do not cancel and the box lands short of the right edge — a
+     thin dark band against the window frame, on the **right only**, because the left edge is
+     fixed by the margin rather than by the sum. `width: auto` derives both edges from the
+     container, so the negative margin widens the box by exactly the gutter, once.
+2. **The filmstrip moved back OUT of the stage column**, below the whole viewer+sidebar row, and
+   spans the **window** — `.filmstripBleed` cancels the nav rail's offset too
+   (`margin-left: calc(var(--app-shell-navbar-offset) * -1)`, `z-index: 102` to clear the fixed
+   navbar at 101), so it runs 0 → 100vw under the rail, which has nothing below its nav items.
+   It is the timeline of the result set, not an accessory of the viewer. (This reverses the
+   v0.4.7 note above; the `<Activity mode="hidden">` treatment that keeps its DOM and scroll
+   state across a toggle is unchanged.)
+   - **Its right margin OVERSHOOTS the gutter, deliberately.** Measured in the installed app,
+     reaching the window's right edge took ~7px MORE than `--app-shell-padding` — some ancestor
+     box is that much narrower than the window there (a reserved scrollbar gutter is the
+     likeliest culprit: Chrome honours `scrollbar-width: thin`, which basalt sets globally, over
+     `::-webkit-scrollbar`). Exact arithmetic against an already-short container can never reach
+     the edge, so the strip takes a full extra `--app-shell-padding`. That is free HERE and
+     nowhere else on the screen: the strip is a horizontal scroll container, so the only
+     consequence is its last cell being cut a few px past the window, and `.noPageScroll` means
+     the page cannot scroll to reveal it. Do NOT do the same to the stage row — its sidebar is
+     anchored to that edge and would be pushed off by exactly the overshoot.
+   - **The outer column therefore carries no `overflow: hidden`** — a clip there cuts exactly
+     the part the bleed exists to show. The clip moved to the stage row, which is the box that
+     actually has something to contain. This is the one thing to re-check if the strip ever
+     stops reaching the left edge.
+3. **Strip height 96 → 82** and the `+9` scrollbar reserve is gone, so the strip costs 86px instead
+   of 105 and the photo takes the difference.
+4. **The strip's scrollbar is macOS-style** (`type="scroll"`, `scrollHideDelay={1200}`, 10px):
+   shown while the strip is moving, faded out otherwise, overlaying the frames rather than
+   reserving a row. It was `type="hover"` — a permanent hairline under 3 000 frames whose thumb is
+   a few px wide and unusable as a control — and briefly `type="never"`, which answered nothing.
+   **The thumb is overridden to a 60% ink mix** (`.filmstripScroll`): basalt's global 25% is tuned
+   for a panel, and over *photographs* at the very bottom edge of the window a 25% capsule 6px
+   tall is invisible — it read as "there is no scrollbar" even though the element was rendering.
+5. **The page itself is locked while the route is mounted** (`.noPageScroll` on `<html>` and
+   `<body>`, added/removed by an effect). The layout is pinned to `100dvh` minus the shell
+   offsets, but `dvh` resolves fractionally on a window with an odd pixel height, and half a
+   pixel of overflow raises a bar — and basalt styles `::-webkit-scrollbar`, which drops Chrome
+   out of macOS's overlay behaviour, so that bar is a **9px gutter** that shortens the sidebar
+   and the filmstrip instead of floating over them. That is why a scrollbar showed in the
+   installed PWA and not in a browser tab of the same width.
+6. **The sidebar is a stack of cards, not a panel.** The column carries **no background**; each
+   section is its own `Paper` (panel surface + `shadow-card`'s ring + `--vx-radius-card`), so the
+   chrome takes up exactly as much of the right edge as it has content and the page surface
+   simply continues below the last card — no full-height slab running down to the filmstrip.
+   The card is now the object, so `.sectionHeader` dropped its resting `surface-subtle` fill and
+   its own radius: it tints edge-to-edge on hover only, clipped to the card's corners by
+   `overflow: hidden` on the `Paper`. An open card separates the two with a hairline
+   (`.sectionBody`, on the scroll container rather than the padded content box, so it holds while
+   the body scrolls under it) drawn in **`--vx-divider`** — the card's ring is a 4%-white inset,
+   so the opaque `--vx-surface-border` read as a hard rule across a soft box; the 6%-white mix is
+   the same material as the rim — that is what makes the title row read as the card's bar instead
+   of as the first line of its content. (That `overflow` does **not** eat the depth token — an
+   outset shadow is painted outside the border box, so an element's own overflow never reaches
+   it. Verified in the browser: the computed shadow still carries both the drop and the inset
+   rim.)
+7. **The track is inset at both ends** (`EDGE` = 6px), so the first and last frame are held off
+   the window and their selection ring has room to draw. The trailing inset carries an extra
+   `RIGHT_BLEED` term that **mirrors `.filmstripBleed`'s `margin-right`** — without it the last
+   frame's breathing room falls entirely outside the window and the strip reads as padded at the
+   start and cut off at the end. (A gapless, radius-less strip was tried here to close a
+   right-edge sliver and **reverted** — it was not the cause, and it made adjacent frames read as
+   one image.)
+8. **The selection ring is neutral, and no longer clipped.** It was `VX.accent`; a saturated blue
+   edge competes with the photographs for no added meaning, so it is now `alpha(VX.neutral, 0.8)`
+   and brightness alone marks the position. The ring is a `box-shadow` spread — it paints *outside*
+   the cell — so with the cells flush against the track the viewport clipped its top edge and the
+   selection read as outlined on three sides. The track now carries a 2px inset (`RING`), added to
+   both `trackWidth` and the cells' `left`/`top`.
+
+### v0.4.7 - Culling View: One Sidebar, No Top Bar (August 2026)
+**Frontend only — no Python change.** The screen had chrome on three edges (top filter bar, left
+folder rail, right info panel) framing the one thing it exists to show. All three collapse into a
+single right-hand `PhotoSidebar`; the top bar's ~40px goes back to the image.
+
+1. **`components/photos/photo-sidebar.tsx`** (new) is the screen's only chrome, and it is *nothing
+   but sections*: four independent collapsibles — **Folders**, **Filters**, **Info**, **View**.
+   Deliberately NOT an accordion — closing one to open another is a tax on a screen you sit in for
+   an hour. Each persists its own open state (`basalt:photos-section-*`) and shows a one-glance
+   `summary` while closed (active root, live-filter count / result count) so the panel answers
+   "anything in there?" unopened. Defaults: only **Info** open — and it has to be, because it
+   carries the stars.
+   - **Section headers are objects, not captions** (`.sectionHeader`): a resting `surface-subtle`
+     fill, a leading icon, a bold uppercase label, a rotating chevron. They are the screen's
+     primary navigation; a header that only appears on hover is a header nobody finds.
+   - **A section body is capped at 44vh** (`ScrollArea.Autosize`) and scrolls inside itself.
+     Uncapped, opening Filters pushed View off the panel and the section list stopped being a list.
+   - **Open/close is a `motion` height-auto tween** (`MOTION_DURATION.fast` /
+     `MOTION_EASE_STANDARD`), not Mantine's `Collapse`, so height, fade and chevron run on one
+     curve; `useReducedMotion` renders a plain unanimated node rather than a 0-duration animation.
+   - **No pinned header.** A filename heading and a portrait/landscape badge are not worth
+     permanent real estate on a screen whose subject is the photograph, so the whole block is gone
+     — orientation deleted outright, stars + label picker moved to the top of **Info**, and the
+     filename demoted to a single truncated `File` row (full path in its tooltip). That row's
+     `flex: 1 1 0` is load-bearing: inside a `ScrollArea` the content box is content-sized, so a
+     `nowrap` value with an `auto` basis widens the whole panel and carries every other row's
+     right-aligned value off the visible edge.
+2. **The sidebar is width-resizable** by dragging its leading edge (248–560px, persisted at
+   `basalt:photos-sidebar-width`). The live width is component state and only reaches localStorage
+   on pointer-up — a drag is otherwise ~60 storage writes a second. The handle is
+   `role="separator"` with `aria-valuenow` (a WAI-ARIA window splitter — the `jsx-a11y`
+   `prefer-tag-over-role` suggestion of `<hr>` is for the decorative case and cannot take a drag),
+   and arrow keys nudge it, which is why `role="separator"` had to join `KEYBOARD_OWNING_ROLES` in
+   the route: otherwise nudging the width also stepped the photo selection.
+3. **One floating control, top-right of the stage.** `position / total` plus the sidebar toggle, at
+   40% opacity until hovered (`photos-screen.module.css`), the icon `color="gray"` — it is chrome
+   pointing at chrome and carries no signal, so it never takes the accent. It anchors to the stage
+   column, not the window, so it never lands on the sidebar. `i` toggles the sidebar now (was the
+   info panel); `f`/`z` unchanged. (The filmstrip sat inside the stage column here too —
+   **superseded by v0.4.8**, which moved it back out to run the full width.)
+4. **Files:** `photo-filters.tsx` `PhotoFilters` → **`PhotoFilterPanel`**, a vertical stack — the
+   Filters popover and the root `SegmentedControl` are gone (a column has the room the one-row bar
+   never had; root is a folder and lives in the Folders section). `photo-info-panel.tsx`
+   `PhotoInfoPanel` → **`PhotoInfo`**, now write-surface-first (stars, label, divider, rows). The
+   folder rail moved out of `routes/photos.tsx` into **`photo-folders.tsx`** (with
+   `splitRootCounts`), gaining an explicit "All" row. New: `sidebar-section.tsx`,
+   `photos-screen.module.css`. The route drops ~230 lines.
+5. **View options are Switches, not icon buttons** — filmstrip, 1:1 zoom, show-trashed, plus an
+   "Open trash…" button. A labelled switch in a panel is discoverable in a way a row of unlabelled
+   16px glyphs never was; the one-key shortcuts remain the fast path.
+
+**Note:** the retired `basalt:photos-rail-open` / `photos-info-open` keys are simply orphaned, so
+the sidebar comes back open once on first load after this change.
+
+### v0.4.6 - Culling View: Layout, Density, and the Stale-PWA Fix (August 2026)
+Two rounds of feedback on the v0.4.5 screen. **No Python change beyond the LaunchAgent plist.**
+
+1. **`ProcessType: Background` was throttling the daemon** (`control_panel/launchd/*.plist`). It
+   looked like the obvious choice for an always-on job, but background QoS pins the process to the
+   efficiency cores on Apple Silicon (observed priority 4 vs 31). Thumbnail generation is CPU-bound
+   JPEG decode and paid a **3.5x** tax: cold `view` 1041 → 305 ms, prewarm 341 → 79 ms/frame. Now
+   `Interactive` + `Nice 0` + `LowPriorityIO false`. This — not any frontend code — was "the
+   responsiveness of the image in view is horrible".
+2. **One decode, both tiers** (`index/thumbs.py` `get_thumbs`, `POST /api/photos/warm?tiers=`).
+   Decode is ~117 ms of the ~194 ms a `view` frame costs and is nearly tier-independent (progressive
+   JPEG is Huffman-bound), so the second tier off a shared decode costs ~8 ms instead of ~79.
+   **Every tier's box is computed from a pre-draft, orientation-corrected `base_size`**, never from
+   whatever `draft()` produced — otherwise the grid tier came out 213px from the dual path and 214px
+   standalone, under the same cache key, and whichever request landed first won.
+3. **The image now actually fits** (`photo-viewer.tsx`). `max-height: 100%` only resolves against a
+   **definite** height; the sharp frame's box had `mih="100%"` with `height: auto`, so the
+   percentage computed to `none`, portrait frames laid out width-limited (~1.5x too tall) and were
+   clipped by the surface's `overflow: hidden`. Measured 540 px of hidden overflow on a 3466x5200
+   frame. Fit mode now sets `h`/`w`; zoom keeps `mih`/`miw` so the pan surface can still exceed the
+   viewport. The placeholder layer never showed the bug — `position: absolute; inset: 0` gave it a
+   definite height for free.
+4. **No dividers on this screen.** Chrome (filter bar, folder rail, info panel) sits on
+   `surface.panel`, the stage (viewer + filmstrip) on `surface.bg`; the surface change is the
+   separator. Filmstrip cells lost their per-cell 1px ring — only the selection is outlined.
+5. **The filter bar is one row at every width.** `wrap="wrap"` fell to three lines on a narrow
+   window and ate a third of the screen's height. Camera / lens / label moved into the (renamed)
+   **Filters** popover alongside the four EXIF ranges, the trigger shows how many are set, and the
+   filename box is the only elastic control (`flex: 1 1 0; min-width: 0`).
+6. **EXIF sliders draw their distribution** — `GET /api/photos/facets` gained `histograms`
+   (`iso`/`aperture`/`shutter`/`focal`, 24 buckets, log-spaced for ISO and shutter or a base-ISO
+   library lands entirely in bucket 0). Plain SVG, not `@visx` — it is a control backdrop, not a
+   chart, and `@visx/*` may only be imported inside a `charts/` dir.
+7. **Trashed photos are reviewable in place** — `include_trashed` on the list endpoint plus a strip
+   toggle; culled frames render desaturated and dimmed rather than vanishing. Trashing while the
+   toggle is on deliberately does NOT optimistically remove the row.
+8. **The Dock PWA now picks up deploys.** `basaltAppPlugin`'s injected `registerSW.js` only
+   registers — nothing reacted to the new worker claiming the page, so load N kept running the
+   precached OLD bundle and only load N+1 saw the change. A browser tab self-corrects on the next
+   ⌘R; an installed PWA that stays open for days never does. `main.tsx` now reloads on
+   `controllerchange` (guarded against a double fire). **This is why a shipped change could look
+   like it had not shipped.**
+9. **Deploying is no longer a thing to remember** — `scripts/reload-if-stale.sh` + `make
+   reload-if-stale`, wired to the Claude Code **`Stop` hook** in `.claude/settings.json`. Three
+   tiers off one stamp file (`~/.photoflow/.last-reload`): no change → ~50 ms exit, Python/plist
+   only → `make service-restart`, panel sources → full `make reload`. The stamp is touched only
+   after a successful run, so a failed build retries instead of claiming to have shipped.
+   `.gitignore` had to become `.claude/*` rather than `.claude/` for the `!.claude/settings.json`
+   negation to bite — git never descends into an excluded *directory*. Watch find(1)'s `-o`
+   precedence in that script; the first version silently never matched a `.py` edit.
+
+### v0.4.5 - Culling View: Photos Screen, Thumbnail Cache, Soft-Delete Trash (August 2026)
+Replaces Adobe Bridge for culling. New SPA route `/photos` (sidebar group "Workflow"), backed by
+three new Python modules and one new router. 166 → 366 tests.
+
+1. **Index schema v2** (`index/db.py`, `indexer.py`). Additive, idempotent
+   `ALTER TABLE ADD COLUMN` guarded by a `PRAGMA table_info` check — the live DB holds thousands
+   of rows and is never recreated. New columns: `root` ('final'|'staging'), `present`,
+   `width`/`height`, `orientation`, `lens_model`, `camera_make`, `label`, `has_sidecar`.
+   **Staging is now indexed into the same table.** The load-bearing invariant:
+   `in_final = 1` ⟺ (`root`='final' AND `present`=1), so every pre-existing analytics/status
+   query (all of which filter `WHERE in_final = 1`) still sees exactly the Final set. Verified
+   against the live DB: 3119 rows, 2365 `in_final=1`, unchanged across the migration.
+   `reindex_paths(paths)` re-reads a single file after a rating write.
+2. **`width`/`height` are DISPLAY dimensions, not raster dimensions**
+   (`metadata_extractor._display_size`). The X-T4 writes portrait frames as a landscape raster
+   plus EXIF Orientation 6/8 — 470 of 2365 Final JPGs. Reading the raster size indexed every one
+   of them as landscape, so a Portrait filter returned nothing and the thumbnail (which applies
+   `exif_transpose`) disagreed with the index about the same file. The tag is read and the axes
+   swapped for values 5–8. The `dimensions` "WxH" string keeps the same, now-corrected, value.
+3. **Thumbnail cache** (`index/thumbs.py`, new). Content-addressed on
+   `sha1(path|mtime_ns|size|tier)` under `~/.photoflow/thumbs` — an edit or a rating write
+   changes mtime and therefore misses naturally; no invalidation bookkeeping. Two tiers:
+   `grid` 320px (filmstrip), `view` 2048px (viewer). Measured: cold 240–270 ms, **warm 2–3 ms**,
+   which is what makes arrow-key stepping instant.
+   - `Image.draft()` runs before the first pixel access, and its box must be the
+     **aspect-preserved** output size, not `(target, target)` — draft only reduces while BOTH
+     dimensions stay ≥ the box, so a square box lets the short edge veto the reduction entirely.
+   - Honest numbers: draft saves 30–37 % on wall time, not the order of magnitude one expects
+     (libjpeg still Huffman-decodes every MCU, and Photomator re-saves Final JPEGs as
+     progressive, where entropy decoding dominates). The real prize is peak memory — ~1 MB
+     instead of ~78 MB per decode, which is what makes a 4-worker `warm()` sane.
+   - `exif_transpose` after draft, before thumbnail. Atomic `os.replace` from a private sibling.
+4. **Soft-delete trash** (`trash.py`, new; `trash` table; `photoflow trash list|restore|purge|stats`).
+   A culled photo is **moved, never unlinked**. `TRASH_PATH` (`~/Pictures/.photoflow-trash`) is
+   deliberately under `~/Pictures` so the move from Final or Staging is a same-filesystem rename.
+   The `.photo-edit` sidecar travels with its JPG and is never deleted independently. Move first,
+   then insert the row; a failed insert moves the files back and reports honestly when that
+   move-back itself failed. An orphaned entry directory (killed between rename and commit) is
+   **adopted**, never reaped. Retention keys off `trashed_at`, **never file mtime** — the same
+   mistake the v0.4.2 rclone trash prune had to fix.
+5. **Trashed photos protect their RAWs** (`workflow.compute_raw_keep_bases`). The keep-set is now
+   Final ∪ Staging ∪ **trash**. Without this, culling 200 photos and then running `finalize`
+   would unlink 200 irreplaceable RAFs — step 4 deletes orphans with no preview and no
+   confirmation. `_trash_keep_bases()` reads the **filesystem**, not the `trash` table: the entry
+   directory is what makes a restore possible, so files without a row still protect their RAW.
+   A RAW becomes an orphan only once `purge` removes the entry, which is the intended semantics.
+6. **`photo_flow/api/routes_photos.py`** (new), prefix **`/api/photos`** — the `/api` segment is
+   deliberate, since the SPA owns the bare `/photos` route and `app.py`'s catch-all would
+   otherwise be shadowed. Endpoints: list (every EXIF dimension filterable), facets (each facet
+   computed with the *other* filters applied and its own dimension left open, so the UI never
+   offers a zero-result option), thumb (immutable `Cache-Control` + ETag + 304), meta,
+   rating/label write-back, trash/restore/purge, warm. Every path goes through
+   `_resolve_in_roots` against `config.CULL_ROOTS` — traversal returns 400.
+   Rating/label are written with **exiftool, one subprocess per batch** (never piexif/Pillow),
+   then `reindex_paths()` reconciles the index. Rating 0 clears the tag.
+7. **`/photos` SPA route** + `src/components/photos/*`. Viewport-filling: filter bar, folder rail,
+   viewer, EXIF info panel, filmstrip. (**Superseded by v0.4.7** — the bar, the rail and the panel
+   are now sections of one right-hand sidebar.) Arrow keys / j-k step, 0–5 rate, ⌫ trash-and-advance,
+   ⌘Z undo, i/f/z toggles. Snappiness is the acceptance criterion: a `warm` POST for ±8
+   neighbours, `img.decode()` preloads for ±3, a bounded LRU, and a viewer that holds the last
+   decoded frame until the next one is ready (no white flash). Mutations are optimistic and
+   invalidate only the key that is actually stale — a star keypress must not refetch the list.
+
+**Two things to know before touching this.** Rating writes `XMP-xmp:Rating` straight into the JPG,
+which is what Bridge did — but v0.3.4 made Photomator the single source of truth for ratings, so
+the two can now overwrite each other. And a trashed Staging JPG leaves its RAF behind: protected
+while the trash entry lives, offered to the (confirm-gated) `cleanup` once it is purged.
+
+### v0.4.4 - Panel on basalt-ui; Staging Mirror Reaches the UI (August 2026)
+**Frontend only — no Python change; all 166 tests pass untouched.**
+
+1. **Adopted `basalt-ui@1.13.0` as a real dependency.** The panel never depended on it: it carried a
+   **vendored fork** of the (pre-1.0 `@argo/charts`) chart library at `src/lib/charts/**`, plus its
+   own Blueprint `theme.ts`, its own app shell, and a hand-rolled `check-hex.mjs`. All of that is
+   deleted — ~25 chart files, 6 shell files, 3 CSS modules (**−1,900 lines**) — and replaced by
+   `basalt-ui/charts`, `createBasaltTheme`, and `BasaltShell`. The fork had drifted: it was on
+   Blueprint hues while basalt had moved to modern zinc, so chrome and charts were quietly two
+   identities. `bunx basalt-ui sync` now keeps the rules current; `.basalt/manifest.json` records
+   the version. **`.claude/` is gitignored here, so the `basalt-*` rules are regenerated, not committed.**
+2. **Mechanical palette enforcement.** `npm run lint` = `oxlint` + `basalt-ui check-theme`. The
+   migration cleared **215 findings to zero**. `src/lib/series.ts` is the ONE place a color is
+   declared, and even it holds no literals — every pair is `p(BP.<family>)` against basalt's own
+   palette, so a basalt retune carries photo-flow along instead of stranding copied hexes.
+3. **What the framework replaced**: `BasaltProvider` + `BasaltOverlays` (⌘K palette — navigation
+   and view toggles ONLY, never a pipeline op), `BasaltShell` (`__root.tsx` 167 → 86 lines),
+   `createBasaltQueryClient`, `basaltViteConfig` + `basaltAppPlugin` (PWA head/manifest/icons now
+   derived from the token palette rather than hand-written hexes in `index.html`),
+   `createPersistedState` for UI prefs, and a typed `defineNotifications` registry so job toasts
+   land in the notification bell/history. `framer-motion` → `motion/react` with `MOTION_*` tokens.
+   Mantine 9.2 → 9.5.1, visx alphas → 4.0.0.
+4. **Staging mirror is now reachable from the panel.** The backend has supported
+   `POST /ops/backup?source=staging` since v0.4.3, but `BACKUP_SOURCES` in the UI listed only
+   final/raws/videos — the feature was CLI-only in practice. It now appears in the backup menu
+   **under its own "Optional" divider** with a "no trash retention" hint, so it never reads as a
+   peer of the canonical set that `all` runs.
+5. **The advisor stopped trusting the backup timestamp alone.** A Photomator re-edit rewrites only
+   the `.photo-edit` sidecar, so a fresh `last_runs.backup` said nothing about whether the edit
+   history had been carried up. `usePipelineAdvisor` now also reads `sidecar_needs_sync` and says
+   "N edit histories not backed up". The Staging mirror is deliberately NOT advised — Staging
+   holding files is the normal state between import and finalize, so advising it would fire on
+   every import and read as noise.
+
+**Two behaviour changes worth knowing:** UI preferences moved to `basalt:*` localStorage keys, so
+the sound / desktop-notify toggles reset once; and error toasts now stay until dismissed (basalt's
+`intent: 'error'` mapping) instead of auto-closing after 6s.
 
 ### v0.4.3 - Sidecar Integrity: Stranded `.photo-edit` Recovery + Sidecar-Aware Freshness (August 2026)
 The `.photo-edit` sidecar is the **only** copy of Photomator's re-editable edit history — no
