@@ -1054,13 +1054,50 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.12
+**Version**: 0.4.13
 **Last Updated**: August 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.13 - The Editor Hand-off: Open in Shutterflow (August 2026)
+
+The culling screen could judge a photo and never change one. Editing lives in
+**Shutterflow** (`~/SourceRoot/shutterflow`, a Tauri app that crops and straightens by
+writing the master's own XMP packet), and until now there was no way to get from one to the
+other — the app existed only as a binary you ran from a terminal.
+
+1. **`POST /api/photos/open-in-editor`** (`routes_photos.py`) takes one path, resolves it
+   through the same `_resolve_in_roots` allowlist as every other surface, and runs
+   `open -a Shutterflow <path>` as an **argument list with no shell**. `EXTERNAL_EDITOR_APP`
+   in `config.py` is a macOS application *name*, not a path: Launch Services resolves it, so
+   the bundle can live in `~/Applications` or `/Applications` without this caring.
+   - **It is a launch, not a write.** Nothing waits for the editor, nothing invalidates a
+     query on success, and photo-flow never learns what changed. Shutterflow writes the
+     master in place, so the edit arrives back through the index on the next reindex — via
+     mtime, exactly like a Photomator edit. An invalidation at click time would refetch the
+     row in its unchanged state and prove nothing.
+   - **Trashed paths are refused** (`include_trash` is not set). Handing a culled photo to
+     an editor that writes to it is a way to resurrect a file the user decided against.
+   - **A missing editor is `opened: false`, not a 500.** The editor is optional and the
+     panel is a pipeline tool; an absent convenience is not a fault in it. `open(1)` itself
+     missing (not macOS) and a 15s timeout are the same kind of answer.
+2. **UI: a `Tools` section in the photos sidebar**, between Info and Cull — it is what you
+   do to the photo in front of you, which is the same class of action as rating it. Plus
+   **`E`** as a one-key shortcut and a **right-click menu on the photograph** (a 1x1
+   absolutely-positioned anchor at the click point, since Mantine's `Menu` anchors to a node
+   and a context menu has none). New persisted key `photos-section-tools`, open by default
+   until the shortcut is muscle memory.
+3. **Tests:** `TestOpenInEditor` (6 cases) — the launcher is monkeypatched, because what is
+   worth asserting is the argument list and the refusals, not that a GUI opens. Traversal,
+   a non-existent path, and a trashed path are each rejected **before** anything is
+   launched; a non-zero exit and a missing `open` binary are both reported rather than
+   raised. 445 → 451 tests.
+
+**Verified live**: `POST /api/photos/open-in-editor` against the running daemon with a real
+Final master opened the app; `/Users/…/.ssh/id_ed25519` returned 400 with nothing launched.
 
 ### v0.4.12 - Reject Flag: Three-State Culling, Trash Demoted to a Batch Step (August 2026)
 

@@ -1325,3 +1325,100 @@ class TestWarm:
         assert client.post(
             "/api/photos/warm", json={"paths": [str(photo)], "tiers": ["grid", "enormous"]}
         ).status_code == 422
+
+
+class TestOpenInEditor:
+    """
+    Handing one photo to the external editor.
+
+    ``open(1)`` is never actually run: the point of every test here is what the endpoint
+    does with a path and with a launcher's answer, and launching a real GUI from a test
+    suite is neither of those. What IS asserted for real is that the path allowlist runs
+    first — the editor writes to whatever it is handed, so a traversal here is a write
+    primitive, not a read one.
+    """
+
+    def _capture(self, monkeypatch, returncode: int = 0, stderr: str = ""):
+        seen: List[List[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(photos_mod.subprocess, "run", fake_run)
+        return seen
+
+    def test_launches_the_editor_with_the_resolved_path(self, client, env, monkeypatch):
+        photo = _make_jpeg(env["final"], "edit-me.JPG")
+        seen = self._capture(monkeypatch)
+
+        result = client.post("/api/photos/open-in-editor", json={"path": str(photo)}).json()
+
+        assert result["opened"] is True
+        assert result["editor"] == photos_mod.EXTERNAL_EDITOR_APP
+        # An argument list, never a shell string: a filename containing a space or a
+        # semicolon has to stay one argument.
+        assert seen == [["open", "-a", photos_mod.EXTERNAL_EDITOR_APP, str(photo)]]
+
+    def test_traversal_is_refused_before_anything_is_launched(self, client, env, monkeypatch):
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor",
+            json={"path": str(env["final"] / ".." / ".." / ".ssh" / "id_ed25519")},
+        )
+
+        assert response.status_code == 400
+        assert seen == []
+
+    def test_a_path_that_is_not_on_disk_is_a_404(self, client, env, monkeypatch):
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor", json={"path": str(env["final"] / "ghost.JPG")}
+        )
+
+        assert response.status_code == 404
+        assert seen == []
+
+    def test_a_trashed_path_is_refused(self, client, env, monkeypatch):
+        """
+        The trash is readable by the preview surfaces and is NOT addressable here.
+
+        Opening a culled photo in an editor that writes to it is a way to resurrect an
+        edit on a file the user has already decided against.
+        """
+        seen = self._capture(monkeypatch)
+        trashed = env["trash"] / "entry" / "gone.JPG"
+        trashed.parent.mkdir(parents=True)
+        trashed.write_bytes(b"not a real jpeg")
+
+        response = client.post("/api/photos/open-in-editor", json={"path": str(trashed)})
+
+        assert response.status_code == 400
+        assert seen == []
+
+    def test_a_launcher_failure_is_reported_not_raised(self, client, env, monkeypatch):
+        """`opened: false` is a normal answer — an absent optional editor is not a 500."""
+        photo = _make_jpeg(env["final"], "no-app.JPG")
+        self._capture(monkeypatch, returncode=1, stderr="Unable to find application named 'Shutterflow'")
+
+        response = client.post("/api/photos/open-in-editor", json={"path": str(photo)})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["opened"] is False
+        assert "Unable to find application" in body["message"]
+
+    def test_a_missing_open_binary_is_reported_not_raised(self, client, env, monkeypatch):
+        photo = _make_jpeg(env["final"], "not-macos.JPG")
+
+        def boom(cmd, **kwargs):
+            raise FileNotFoundError("open")
+
+        monkeypatch.setattr(photos_mod.subprocess, "run", boom)
+
+        body = client.post("/api/photos/open-in-editor", json={"path": str(photo)}).json()
+
+        assert body["opened"] is False
+        assert "not available on this platform" in body["message"]

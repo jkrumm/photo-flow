@@ -11,6 +11,7 @@ import type {
   Facets,
   PhotoFilters,
   PhotoListResponse,
+  OpenInEditorResult,
   PhotoMeta,
   PurgeResult,
   RejectSummary,
@@ -108,6 +109,16 @@ export const photosApi = {
       paths: paths.slice(0, MAX_WRITE_PATHS),
       rating,
     }),
+
+  /**
+   * Hand one photo to the external editor (Shutterflow).
+   *
+   * A launch, not a write: nothing here waits for the editor or learns what it did. The
+   * editor writes the master's XMP packet in place, so the change arrives back through
+   * the index the same way a Photomator edit does — on the next reindex, via mtime.
+   */
+  openInEditor: (path: string): Promise<OpenInEditorResult> =>
+    api.post<OpenInEditorResult>(`${PHOTOS_API}/open-in-editor`, undefined, { path }),
 
   /** Write an XMP colour label to a batch of photos; an empty string clears it. */
   setLabel: (paths: string[], label: string): Promise<WriteResult> =>

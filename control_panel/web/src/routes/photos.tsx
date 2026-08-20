@@ -24,10 +24,11 @@
  * error. Trash is a *move*, and the toast carries an Undo wired to the restore endpoint.
  */
 import { Activity, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import type { SearchSchemaInput } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Box, Button, Code, Flex, Group, Text, Tooltip } from '@mantine/core'
+import { ActionIcon, Box, Button, Code, Flex, Group, Menu, Text, Tooltip } from '@mantine/core'
 import { useDebouncedCallback, useHotkeys } from '@mantine/hooks'
 import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
@@ -35,6 +36,7 @@ import {
   IconArrowBackUp,
   IconLayoutSidebarRightCollapse,
   IconLayoutSidebarRightExpand,
+  IconTool,
 } from '@tabler/icons-react'
 import { notifyError, notifySuccess } from 'basalt-ui/notifications'
 import { createPersistedState } from 'basalt-ui/state'
@@ -701,6 +703,50 @@ function PhotosPage() {
     if (!alreadyRejected) step(1)
   }, [selectedRow, rateMutation, step])
 
+  /**
+   * Hand the selected photo to Shutterflow.
+   *
+   * Nothing is invalidated on success, deliberately. The editor has been *launched*, not
+   * run: whatever it writes happens minutes later, in another process, and an invalidation
+   * now would refetch the row in its unchanged state and prove nothing. The edit comes back
+   * through the index on the next reindex, the same way a Photomator edit does.
+   */
+  const editMutation = useMutation({
+    mutationFn: (path: string) => photosApi.openInEditor(path),
+    onSuccess: (result) => {
+      // `opened: false` is a normal answer — the editor is optional. It carries its own
+      // explanation (not installed, would not launch), so it is shown rather than
+      // flattened into a generic failure.
+      if (result.opened) notifySuccess(result.message, { title: result.editor })
+      else notifyError(result.message, { title: `${result.editor} not available` })
+    },
+    onError: (error: Error) => notifyError(error.message, { title: 'Could not open the editor' }),
+  })
+
+  const editSelected = useCallback((): void => {
+    if (selectedRow === null) return
+    editMutation.mutate(selectedRow.path)
+  }, [selectedRow, editMutation])
+
+  /**
+   * Where the context menu was summoned, in the stage's own coordinates.
+   *
+   * Stage-relative rather than viewport-relative because the anchor is an absolutely
+   * positioned child of the stage — which is also what keeps the menu from opening over
+   * the sidebar when the click was near the right edge of the photo.
+   */
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+
+  const openStageMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>): void => {
+      if (selectedRow === null) return
+      event.preventDefault()
+      const box = event.currentTarget.getBoundingClientRect()
+      setMenuAt({ x: event.clientX - box.left, y: event.clientY - box.top })
+    },
+    [selectedRow],
+  )
+
   const purgeRejectsMutation = useMutation({
     mutationFn: () => photosApi.purgeRejects(filters.root),
     onSuccess: (result) => {
@@ -848,6 +894,9 @@ function PhotosPage() {
       ['Backspace', whenIdle(rejectSelected)],
       ['Delete', whenIdle(rejectSelected)],
       ['mod+Z', whenIdle(undoLastTrash)],
+      // `e` for edit. Not `mod+e`: this screen's whole vocabulary is single keys, and the
+      // action is a launch, not something destructive that wants a modifier in front of it.
+      ['e', whenIdle(editSelected)],
       ['i', whenIdle(() => setSidebarOpen(!sidebarOpen))],
       ['f', whenIdle(() => setStripOpen(!stripOpen))],
       ['z', whenIdle(() => setZoomed(!zoomed))],
@@ -874,7 +923,7 @@ function PhotosPage() {
           window, and therefore never lands on top of the sidebar.
         */}
         <Flex direction="column" style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-          <Box style={{ flex: 1, minHeight: 0 }}>
+          <Box style={{ flex: 1, minHeight: 0 }} onContextMenu={openStageMenu}>
             <PhotoViewer
               row={selectedRow}
               loading={listQuery.isPending}
@@ -882,6 +931,46 @@ function PhotosPage() {
               onToggleZoom={() => setZoomed(!zoomed)}
             />
           </Box>
+
+          {/*
+            Right-click the photograph.
+
+            The target is a 1x1 box placed where the click landed, which is the standard way
+            to give a popover a position rather than an element — Mantine's `Menu` anchors to
+            a node and a context menu has none. `pointerEvents: none` so the invisible anchor
+            can never eat a click of its own.
+          */}
+          <Menu
+            opened={menuAt !== null}
+            onClose={() => setMenuAt(null)}
+            position="bottom-start"
+            withinPortal
+            shadow="shadow-raised"
+          >
+            <Menu.Target>
+              <Box
+                style={{
+                  position: 'absolute',
+                  left: menuAt?.x ?? 0,
+                  top: menuAt?.y ?? 0,
+                  width: 1,
+                  height: 1,
+                  pointerEvents: 'none',
+                }}
+              />
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconTool size={14} />}
+                onClick={() => {
+                  setMenuAt(null)
+                  editSelected()
+                }}
+              >
+                Edit in Shutterflow
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
 
           {/*
             The only chrome that floats over the photo: where you are in the set, and the
@@ -948,6 +1037,8 @@ function PhotosPage() {
             rejectCount={rejectsQuery.data?.count ?? 0}
             onPurgeRejects={purgeRejects}
             purging={purgeRejectsMutation.isPending}
+            onEdit={editSelected}
+            editing={editMutation.isPending}
           />
         )}
       </Flex>

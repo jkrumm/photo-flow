@@ -69,6 +69,18 @@ CULL_ROOTS = {
     "staging": STAGING_PATH,
 }
 
+# The external editor the culling view hands a photo to.
+#
+# A macOS application NAME, resolved by Launch Services (`open -a`), not a path: the
+# bundle moves between ~/Applications and /Applications depending on how it was installed
+# and a hardcoded path would break on the other one. Shutterflow lives in
+# ~/SourceRoot/shutterflow; `make install` there puts the bundle where this can find it.
+#
+# Nothing in the pipeline depends on this. If the app is absent the endpoint reports that
+# and no photo is touched — the editor is a convenience on top of the library, never a
+# step in it.
+EXTERNAL_EDITOR_APP = "Shutterflow"
+
 # Derived thumbnail/preview cache. Disposable: safe to delete, regenerates on demand.
 THUMB_CACHE_PATH = Path.home() / ".photoflow" / "thumbs"
 # Long-edge pixels per tier. `grid` feeds the filmstrip, `view` the big viewer.

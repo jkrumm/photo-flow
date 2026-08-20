@@ -72,7 +72,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from photo_flow import trash as trash_module
-from photo_flow.config import CULL_ROOTS, EDIT_SIDECAR_SUFFIX, THUMB_SIZES, TRASH_PATH
+from photo_flow.config import (
+    CULL_ROOTS,
+    EDIT_SIDECAR_SUFFIX,
+    EXTERNAL_EDITOR_APP,
+    THUMB_SIZES,
+    TRASH_PATH,
+)
 from photo_flow.index import thumbs
 from photo_flow.index.db import get_db
 from photo_flow.index.indexer import reindex_paths
@@ -1398,6 +1404,75 @@ async def photos_set_rating(body: RatingRequest) -> WriteResult:
     value = "" if body.rating == 0 else str(body.rating)
     result = await asyncio.to_thread(_write_and_reindex, paths, [f"-XMP-xmp:Rating={value}"])
     return WriteResult(**result)
+
+
+class OpenInEditorRequest(BaseModel):
+    path: str
+
+
+class OpenInEditorResult(BaseModel):
+    opened: bool
+    editor: str
+    message: str
+
+
+@router.post("/api/photos/open-in-editor", response_model=OpenInEditorResult)
+async def photos_open_in_editor(body: OpenInEditorRequest) -> OpenInEditorResult:
+    """
+    Hand one photo to the external editor.
+
+    This is a **launch, not a write**: photo-flow does not read the result, does not wait
+    for it, and does not learn that anything changed. The editor writes the XMP packet of
+    the master in place, so the next reindex picks the change up the same way it picks up a
+    Photomator edit — via mtime. That is the whole integration, deliberately.
+
+    ``open -a NAME PATH`` is invoked as an argument list with no shell, and the path has
+    already been through :func:`_resolve_in_roots`, so neither the app name nor the
+    filename can be made to mean something else. Trashed paths are excluded: the editor
+    would write to a file the user has already culled.
+
+    A missing application is reported, never raised as a 500 — the panel is a pipeline
+    tool and an absent optional editor is not a fault in it.
+    """
+    path = _resolve_in_roots(body.path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{path.name} is not on disk")
+
+    def _launch() -> OpenInEditorResult:
+        try:
+            proc = subprocess.run(
+                ["open", "-a", EXTERNAL_EDITOR_APP, str(path)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except FileNotFoundError:
+            # `open(1)` itself missing: not macOS.
+            return OpenInEditorResult(
+                opened=False,
+                editor=EXTERNAL_EDITOR_APP,
+                message="`open` is not available on this platform.",
+            )
+        except subprocess.TimeoutExpired:
+            return OpenInEditorResult(
+                opened=False,
+                editor=EXTERNAL_EDITOR_APP,
+                message=f"{EXTERNAL_EDITOR_APP} did not respond within 15s.",
+            )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            return OpenInEditorResult(
+                opened=False,
+                editor=EXTERNAL_EDITOR_APP,
+                message=detail or f"{EXTERNAL_EDITOR_APP} could not be launched.",
+            )
+        return OpenInEditorResult(
+            opened=True,
+            editor=EXTERNAL_EDITOR_APP,
+            message=f"Opened {path.name} in {EXTERNAL_EDITOR_APP}.",
+        )
+
+    return await asyncio.to_thread(_launch)
 
 
 @router.post("/api/photos/label", response_model=WriteResult)

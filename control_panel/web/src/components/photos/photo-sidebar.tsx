@@ -27,6 +27,7 @@ import {
   IconFilter,
   IconFolder,
   IconInfoCircle,
+  IconTool,
   IconTrash,
 } from '@tabler/icons-react'
 import { createPersistedState } from 'basalt-ui/state'
@@ -72,6 +73,14 @@ const useViewOpen = createPersistedState({ key: 'photos-section-view', version: 
 // Open by default: it holds the only button in the app that moves a culled photo, and a
 // pass that has accumulated rejects should say so without being opened first.
 const useCullOpen = createPersistedState({ key: 'photos-section-cull', version: 1, initial: true })
+// Open by default, because the whole point of this section is that nobody could find the
+// editor. Once handing a photo to Shutterflow is muscle memory (`E`, or right-click the
+// photo) this can go back to being closed like the rest of the setup sections.
+const useToolsOpen = createPersistedState({
+  key: 'photos-section-tools',
+  version: 1,
+  initial: true,
+})
 
 // ── Resize handle ────────────────────────────────────────────────────────────
 
@@ -166,6 +175,9 @@ export type PhotoSidebarProps = {
   rejectCount: number
   onPurgeRejects: () => void
   purging: boolean
+  /** Hand the selected photo to the external editor. Also bound to `E` by the route. */
+  onEdit: () => void
+  editing: boolean
 }
 
 export function PhotoSidebar({
@@ -190,6 +202,8 @@ export function PhotoSidebar({
   rejectCount,
   onPurgeRejects,
   purging,
+  onEdit,
+  editing,
 }: PhotoSidebarProps) {
   const [storedWidth, setStoredWidth] = useSidebarWidth()
   // Live width during a drag; `null` means "not dragging, read the persisted value".
@@ -201,6 +215,7 @@ export function PhotoSidebar({
   const [infoOpen, setInfoOpen] = useInfoOpen()
   const [viewOpen, setViewOpen] = useViewOpen()
   const [cullOpen, setCullOpen] = useCullOpen()
+  const [toolsOpen, setToolsOpen] = useToolsOpen()
 
   // Root is excluded: `clearFilters` deliberately keeps it, so counting it here would
   // advertise a filter the Clear button does not clear.
@@ -274,6 +289,38 @@ export function PhotoSidebar({
               onToggle={() => setInfoOpen(!infoOpen)}
             >
               <PhotoInfo row={selectedRow} onRate={onRate} onLabel={onLabel} />
+            </SidebarSection>
+
+            {/*
+              Tools sits between Info and Cull on purpose: it is what you do to the photo
+              in front of you, which is the same class of action as rating it, and it is
+              not part of ending the pass.
+            */}
+            <SidebarSection
+              title="Tools"
+              icon={<IconTool size={14} />}
+              open={toolsOpen}
+              onToggle={() => setToolsOpen(!toolsOpen)}
+              summary={selectedRow === null ? 'no photo' : 'Shutterflow'}
+            >
+              <Stack gap="xs">
+                <Button
+                  size="compact-xs"
+                  variant="default"
+                  fullWidth
+                  disabled={selectedRow === null}
+                  loading={editing}
+                  onClick={onEdit}
+                >
+                  Edit in Shutterflow
+                </Button>
+                <Text size="xs" c="dimmed">
+                  Press <strong>E</strong>, or right-click the photo. Shutterflow crops and
+                  straightens without re-encoding — the edit is written into the
+                  photograph&apos;s own XMP packet, so this library keeps one master, not a
+                  copy.
+                </Text>
+              </Stack>
             </SidebarSection>
 
             <SidebarSection

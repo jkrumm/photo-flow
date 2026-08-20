@@ -141,6 +141,18 @@ export type TrashResult = {
   messages: string[]
 }
 
+/**
+ * The result of handing a photo to the external editor.
+ *
+ * `opened: false` is a normal answer, not an error: the editor is optional and a machine
+ * without it installed must say so plainly rather than surface a 500.
+ */
+export type OpenInEditorResult = {
+  opened: boolean
+  editor: string
+  message: string
+}
+
 /** How many photos are flagged rejected and awaiting the batch purge. */
 export type RejectSummary = {
   count: number
