@@ -76,15 +76,55 @@ generate_timestamped_filename(file_path: Path, existing_names: set) -> tuple[str
 
 ## System Architecture
 
-### File Paths (Hardcoded in config.py)
+### File Paths (config.py, resolved from `library_config` — v0.4.16+)
 ```python
-CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM")
-STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
-RAWS_PATH = Path("/Volumes/EXT/Bilder/RAWs")
-FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
-SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
-GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
+CAMERA_PATH  = Path("/Volumes/Fuji X-T4/DCIM")                              # roots.camera
+STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")               # roots.staging
+RAWS_PATH    = Path("/Volumes/EXT/Bilder/RAWs")                             # roots.raws
+FINAL_PATH   = Path("/Users/johannes.krumm/Pictures/Final")                 # roots.final
+SSD_PATH     = Path("/Volumes/EXT/Videos/Videos")                           # roots.videos
+GALLERY_PATH = Path(".../photo-flow/photo_gallery/src")                     # roots.gallery
+TRASH_PATH   = Path("/Users/johannes.krumm/Pictures/.photoflow-trash")      # roots.trash
 ```
+The values above are the DEFAULTS, byte-identical to the literals that used to be hardcoded.
+They now come from `photo_flow/library_config.py`, which reads two optional TOML files:
+
+| File | Owns | Rule |
+|-|-|-|
+| `~/.photoflow/config.toml` | `[library] root` · `[roots]` · `[[cameras]]` | Machine facts. Wrong on any other computer. Found at a FIXED path — it is what says where the library is, so it cannot live inside it. |
+| `<library root>/photoflow.toml` | `[stage]` · `[layout]` · `[naming]` · `[[collections]]` | Facts about the photographs. Travels with a copied library; survives `rm index.db`. |
+
+**Strictness follows danger.** The install file names directories, so a bad one is FATAL:
+`photo_flow.config` raises `LibraryConfigError` at import and `cli.py` turns it into one
+line + exit 2 (the LaunchAgent runs `photoflow serve`, so a broken file stops the daemon
+rather than pointing it at a guessed tree). All-or-nothing — never half-applied. The
+library file cannot point an operation anywhere, so it degrades to defaults and reports,
+matching `collections.py`'s tolerant-read/refused-write contract on the SAME file.
+
+Refusals (each one a safety test, `tests/test_library_config.py`, 65 functions / 122 cases):
+a root guarded by **containment, not a blocklist** (v0.4.19) — a container directory (`/`,
+`/Users`, `/Volumes`, `/home`, `/mnt`, `/media`, `/net`, `/System/Volumes`) or any direct
+child of one, AND anything at any depth inside a system or credential tree (`/System`,
+`/Library`, `/usr`, `/private`, `~/Library`, `~/.ssh`, `~/.gnupg`, `~/.aws`, …) — checked on
+the fully resolved (symlinks, `~`, `..`) path, casefolded per component, over the ASSEMBLED
+roots (including one derived from `library.root` or a camera profile), never just the
+configured ones · two roots naming the same directory · Staging inside Final or vice versa ·
+trash inside a culling root or vice versa · unknown/misspelled key · unknown enum value · a
+camera `volume` that is a path · duplicate camera id · a `naming.template` without `{base}`,
+with a separator, or with an unknown placeholder. `library.root` is checked by the same
+guard minus the containment clause (`library_root_refusal`), so a library sitting at the top
+of a dedicated disk (`library.root = "/Volumes/Photos"`) stays expressible.
+
+**The three axes of 0003 are CONFIGURATION, NOT BEHAVIOUR.** `[stage] mode = folders |
+in-place`, `[layout] mode = flat | year-month | album | as-is`, `[naming] template/apply`.
+Nothing reads a non-default value; restage/relayout move irreplaceable files and are a
+later stage. `ORGANISATION.unimplemented` names every axis set away from its default, and
+`photoflow config show` + `GET /api/config` print it — a setting that silently does nothing
+is the same class of failure as a path that silently points elsewhere.
+
+CLI: `photoflow config show | check | init` (`init` writes a commented file holding exactly
+the current defaults and REFUSES to overwrite). API: `GET /api/config`, read-only — a
+mis-clicked roots table is a restore from the homelab, not an undo.
 
 ### Remote Destinations
 
@@ -144,6 +184,9 @@ photo_flow/ (Python core — unchanged)
        ├── cli.py (Click / RichReporter)
        ├── photo_flow/api/ (FastAPI — QueueReporter → SSE)
        │     app.py · routes_status · routes_ops · routes_jobs · routes_analytics
+       │     routes_photos (culling + facets + narrowing + structure) · routes_collections
+       │     routes_config (read-only `GET /api/config`) · library_config.py (roots/editors/axes)
+       │     collections.py → ~/Pictures/photoflow.toml (saved queries; NOT in the index)
        │     jobs.py (asyncio.to_thread + single-flight Lock)
        │     job_store.py (durable job records — outlive a restart; v0.4.10)
        │     Serves static control_panel/web/dist/ + SPA fallback
@@ -152,6 +195,8 @@ photo_flow/ (Python core — unchanged)
 control_panel/web/       Vite React SPA (build → dist/ served by FastAPI)
   src/main.tsx           BasaltProvider → BasaltOverlays (⌘K) → QueryClient → Router
   src/routes/__root.tsx  BasaltShell (sidebar/mobile-nav/breadcrumbs/globalActions)
+  src/lib/structure.ts   the four candidate library layouts, client side (F3)
+  src/lib/narrowing.ts   types only — the precedence RULE lives server-side, never twice
   src/lib/series.ts      the app's series dictionary — the only place a color is declared
   src/lib/commands.ts    ⌘K registry: navigation + view toggles ONLY, never a pipeline op
   DESIGN.md              app-level design law (deltas over the shipped basalt-* rules)
@@ -168,7 +213,8 @@ restart that empties `GET /jobs` — and marks whatever was in flight `interrupt
 
 **Serving:** `photoflow serve` runs uvicorn; FastAPI mounts the built SPA at `/` with a catch-all
 SPA fallback after all `/api`-prefixed routes are registered. Dev: Vite on port 7718 proxies
-`/health`, `/status`, `/ops`, `/jobs`, `/events`, `/analytics`, `/index`, `/backup`, `/gallery` to 7717.
+`/api` (photos, collections, config), `/health`, `/status`, `/ops`, `/jobs`, `/events`,
+`/analytics`, `/index`, `/backup`, `/gallery` to 7717.
 
 ---
 
@@ -1034,7 +1080,15 @@ pipx uninstall photo-flow
 
 ## Known Limitations
 
-1. **Single camera support**: Hardcoded to Fuji X-T4 volume name
+1. **Single camera support**: still Fuji-only. v0.4.16 added `[[cameras]]` to
+   `~/.photoflow/config.toml` (volume, DCIM subdir, per-type extensions) and `EXTENSIONS` is
+   the union across profiles — but **the profile is accepted, validated and inert**. Two
+   hardcodes defeat it: `file_manager.scan_camera_files()` globs `CAMERA_PATH/*_*` (a Fuji
+   DCIM folder convention — a Sony `100MSDCF` card scans to zero files), and
+   `workflow.import_from_camera()` routes on the literals `.JPG` / `.RAF` / `.MOV`, so an
+   `.ARW` found by the scan is silently dropped. `CAMERA_PATH` is also bound to `cameras[0]`
+   at import and never follows `INSTALL.active_camera()`, so `config show` can name one body
+   while `import` reads another. Do not treat this row as done.
 2. **No progress persistence**: Interrupted operations start from beginning
 3. **No undo mechanism**: Operations are permanent (dry-run recommended)
 4. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicate detection)
@@ -1054,13 +1108,339 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.13
+**Version**: 0.4.19
 **Last Updated**: August 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.19 - Undoable Ratings, a Hardened Root Guard, and the RAW Hand-off (August 2026)
+
+**Stage F7** closes the F1–F7 chain (`shutterflow/docs/decisions/0003`, `0005`). The other two
+items below are data-loss defects an adversarial review found in F5/F6's and F4's own work,
+fixed in the same pass — item 1 is the most consequential change in this release.
+
+1. **Rating writes are now undoable, and a broadcast past 20 frames is gated — a real
+   data-loss defect.** In the contact sheet (v0.4.18), shift-selecting a range and pressing a
+   number key ran `exiftool -overwrite_original -XMP-xmp:Rating=N` in place across every
+   master in the selection with **no inverse**: `⌘Z` was wired to `undoLastTrash` only.
+   Ratings are the entire output of a cull pass and Photomator is their single source of
+   truth for them, so one keystroke over a 500-frame range destroyed unrecoverable work.
+   Fixed on both sides:
+   - `POST /api/photos/rating` now reads and returns every touched path's prior rating
+     **unconditionally** (`RatingWriteResult.previous`, via `_current_ratings`) — not gated on
+     batch size, so the client can always build the exact inverse rather than only above a
+     size guess.
+   - `POST /api/photos/rating/undo` (new) restores per-path values, paths grouped by their
+     target rating (at most 7 exiftool calls — the whole -1..5 range — regardless of how many
+     photos are in the batch). A group whose write fails reports its own paths in
+     `failed_paths` rather than guessing file-by-file: an undo would rather over-report a
+     failure than tell the caller it landed when it didn't.
+   - In the SPA, `lastActionRef` generalised from a trash-only ref to `UndoableAction`
+     (`trash | rating`), so `⌘Z` inverts whichever happened last. `RATING_CONFIRM_THRESHOLD =
+     20` (`routes/photos.tsx`) gates any write past that size behind a confirm modal naming
+     both the count and how many of the selected frames currently carry a **different**
+     rating (the number actually overwritten, not merely reconfirmed) — the modal names `⌘Z`
+     as the secondary safeguard, since the load-bearing one is that the write is undoable at
+     all.
+   - `TestRatingUndo` (7 cases) plus `RatingWriteResult.previous` coverage in
+     `tests/test_photos_api.py`.
+2. **The library-config root guard now refuses by containment, not a two-entry blocklist —
+   also found by adversarial review, also a real gap.** F4's guard (v0.4.16) refused only `/`
+   and the bare `$HOME`; `/Users`, `/Volumes` and `/System` all loaded clean, and
+   `sync_gallery` rsyncs every rating≥4 JPG under `FINAL_PATH` to a **public** host — so a
+   hand-edited `~/.photoflow/config.toml` pointing a root at `/Users` turned a routine publish
+   into exfiltration of the whole account. `library_config.py`'s `_refusal()` now refuses two
+   shapes: a container (`/`, `/Users`, `/Volumes`, `/home`, `/mnt`, `/media`, `/net`,
+   `/System/Volumes`) and any direct child of one, AND anything at any depth inside a system
+   or credential tree (`/System`, `/Library`, `/usr`, `/private`, `~/Library`, `~/.ssh`,
+   `~/.gnupg`, `~/.aws`, `~/.config`, `~/.local`). Four properties make it hold: paths are
+   fully **resolved** (`~`, `..`, symlinks) before comparison — a guard that checks one path
+   while the operation walks another is not a guard — and compared **casefolded per
+   component**, since macOS's default filesystem is case-insensitive and `realpath` does not
+   normalise case; the guard runs over the **assembled** roots, not only the configured ones,
+   so a root derived from `library.root` or built from a camera profile (`volume = "EXT"`,
+   `dcim = "."`, which `import` would empty since it deletes originals) is refused too, naming
+   where it came from; and refusal is **fatal** — no partial application, no silent fallback
+   to a default, because a fallback means the operation believes it ran against the configured
+   tree when it ran against another. `library_root_refusal()` stays the looser, second tier so
+   `library.root = "/Volumes/Photos"` (a library at the top of a dedicated disk) keeps
+   working. `tests/test_library_config.py` now carries 65 test functions (122 parametrized
+   cases), including an assertion that the live install's own seven configured roots still
+   pass. Findings in `shutterflow/docs/decisions/0003` § "The root guard, resolved:
+   containment, not a blocklist".
+3. **Stage F7 — the RAW hand-off.** `photo_flow/raw_link.py` (new): `find_raw(jpg_path,
+   raws_root)` correlates a JPG to its RAF via `timestamp_renamer.correlation_base`
+   (Photomator `_2`/`_3`-tolerant), never `extract_original_base` — the same mismatch class
+   that has previously exposed irreplaceable RAWs elsewhere in this codebase — and
+   distinguishes `found` / `no_raw` / `unmounted` / `missing` via
+   `library_config.root_availability`. `POST /api/photos/open-in-editor` gained
+   `target: "jpeg" | "raw"`; for `raw` it still takes the JPG's own path and derives the RAF
+   server-side, launching that instead of the JPG. **`RAWS_PATH` is deliberately NOT in
+   `config.CULL_ROOTS`/`_allowed_roots`** — widening the shared allowlist would make an
+   irreplaceable RAF newly writable and trashable through endpoints (`rating`, `trash`) that
+   have no reason to address one, so the hand-over gets its own narrow, read-only resolver
+   instead. The now-unreachable `_RAW_SUFFIXES` constant is gone. **UI:** the sidebar Tools
+   section and the stage right-click menu render one button per configured editor per kind
+   (JPEG editors, then a RAW section); `E` and the single-editor case still resolve to the
+   server default with no picker. Tests: `tests/test_raw_link.py` (6) + `TestOpenInEditorRaw`
+   (7). **NOT verified live** — `/Volumes/EXT` is unmounted, so no real RAF was ever opened by
+   a real RAW developer; only a monkeypatched `open` and a monkeypatched root were exercised.
+4. **Four falsified numbers, corrected where they were written**, found by the same
+   adversarial pass: `photos_original`'s full-tier cost docstring (real: 365–812 ms, median
+   630; 3.07–9.51 MB; 26 MP portrait masters 766–812 ms and 9.0–9.5 MB — both upper bounds had
+   been understated ~30%); `photo-viewer.tsx`'s master-request range ("4.6–21.7 MB" → real
+   0.43–21.7 MB, median 7.3); `MAX_COMPARE = 4`'s rationale in `photo-compare.tsx` (had
+   claimed the layout "stops improving after four" when the marginal-cost table shows no
+   break there — cap kept at 4, rationale replaced with the honest one: a burst you cannot
+   hold in your head is not a comparison, plus a ~415 MB worst-case bitmap budget, which
+   itself corrected a "~352 MB" figure that was 4x the MEDIAN master rather than the worst
+   case); and shutterflow `0010`'s portrait-frame count ("470 of 2364 Final frames are
+   portrait" → really **512**, `SELECT orientation, COUNT(*) FROM photos WHERE in_final=1` →
+   landscape 1852, portrait 512).
+5. **An `Enter` binding stole a keystroke.** `['Enter', ...]` closed the contact sheet
+   unconditionally, and `whenIdle`'s guard bails only on INPUT/TEXTAREA/SELECT and roles
+   slider/dialog/separator — `BUTTON` is in neither, so tabbing to a sidebar folder or
+   collection row and pressing `Enter` both activated the row and ejected you from the sheet.
+   Fixed with a `whenIdleNotButton` wrapper applied only to that one binding
+   (`routes/photos.tsx`).
+6. **Two duplicated constant sets pinned** (`tests/test_client_constants.py`):
+   `THUMB_LONG_EDGE` against `config.THUMB_SIZES` (decides when a 0.43–21.7 MB master is
+   fetched, so drift silently desynchronises the compare stage's fetch threshold) and
+   `scripts/grid_survey.py`'s `GAP`/`PAD`/`CELL_ASPECT`/`DENSITY_STEPS` against
+   `photo-grid.tsx`.
+
+### v0.4.18 - The Contact Sheet: a Set-Shaped Surface, and the Ring That Did Not Survive It (August 2026)
+
+**Stage F6** — a virtualized full-page grid over the whole result set. The findings are the
+deliverable and live in `shutterflow/docs/decisions/0010-contact-sheet-role-and-density.md`;
+this is what the code does. **Frontend only — no Python change.**
+
+1. **`components/photos/photo-grid.tsx`** (new) windows the result set with the same arithmetic
+   the filmstrip uses — uniform cells absolutely positioned in a track of the full extent, so
+   "what is visible" is pure arithmetic against `scrollTop` with no measurement pass and no
+   virtualization dependency. `rows.length` is up to 3 797; the DOM holds ~32. `g` toggles it,
+   `ArrowUp`/`ArrowDown` move by `gridColumns` (a row, not a frame), density is a slider over
+   `DENSITY_STEPS` (96…320 px target cell width, persisted at `photos-grid-density`).
+   - **Cells are `object-fit: contain`, not `cover`.** The strip crops because a strip cell is a
+     locator; a sheet cell is being *judged*, and a crop hides where the subject sits and whether
+     the frame is level. Portrait frames letterbox and pay ~33 % of the cell — that is the price
+     of not lying about composition, and it is why density is adjustable.
+   - **The window is NOT widened to contain the focus.** The strip does that harmlessly because it
+     re-centres on every step; a sheet scrolls independently of its focus, so the same rule makes
+     the window the whole *span* between them. Measured: a fling to the bottom with the focus on
+     row 0 mounted **all 3 515** cells and prewarmed the entire result set. The focused cell is
+     mounted separately instead, which is all `scrollIntoView` ever needed.
+   - A cell that outgrows `THUMB_SIZES['grid']` by more than `UPGRADE_RATIO` (1.25) asks for
+     `view` instead. Self-limiting: big cells and many cells are mutually exclusive.
+2. **The viewer's 1-D prewarm ring is now gated on `gridOpen`, and this was a real defect.**
+   `warmGridWindow` reshaped the *sheet's* prefetch correctly (keyed on the visible window, one
+   tier, debounced 220 ms — a 20 s full traversal fires **one** warm POST), but the ring was left
+   running underneath it. Measured with the sheet open at 236 px cells, per settled step: a
+   **second** warm POST for **15 paths at BOTH tiers**, plus up to four `view` decodes
+   (2.1 MB encoded over two keystrokes, ~4.8 MB resident each) into an LRU capped at 24 — i.e. up
+   to **~116 MB** of full-size bitmaps held for a screen whose entire visible content is 4.7 MB of
+   320 px thumbnails. All the ring legitimately owes the sheet is the ONE frame `Enter` opens, and
+   warming it server-side is enough (the viewer paints `grid` instantly and upgrades), so the
+   upgrade costs a **3 ms** warm fetch instead of a **321 ms** cold generation. After: 1 path, 0
+   decodes. The viewer's own ring is unchanged the moment the sheet closes — verified both ways.
+   **The rule for anything after this: a prefetch ring is keyed to a traversal order, and a grid
+   has two. Reuse the endpoint, the tiers and the cache; do not reuse the ring.**
+3. **Selection is F5's marked set, not a second model.** The grid owns no selection state — every
+   gesture is reported upward with its modifiers. The cap is `MAX_MARKED = MAX_WRITE_PATHS`,
+   because the reason to mark forty frames is to write to them and a selection larger than the
+   endpoint accepts is one whose whole purpose 413s. **Same set, different verb:** in the viewer a
+   star applies to the focused frame even while comparing (broadcasting across a comparison would
+   say "these are equally good"); in the sheet broadcasting *is* the point. Rejecting in the sheet
+   does not advance the focus — the frames are all still on screen.
+4. **Measured over the real 3 515-row result set** (3 797 present, minus 282 rejected by the
+   default view), 979x905 viewport: a full 20 s traversal ran **960 frames at p50 20.8 ms / max
+   31.6 ms with zero frames over 32 ms** — and an *idle* rAF loop on the same machine also measures
+   20.8 ms, so the scroll adds nothing measurable. A hard fling passes 588 cells and fires **146**
+   requests (a fling skips ~75 % of what it flies over). Renderer RSS peaks at 312 MB from a
+   176.7 MB baseline and *falls* to 201 MB on a second pass — Chrome's own image cache, reclaimed,
+   not a leak. Whole-library `grid` cache: **42.7 MB** (10.4 KB a photo) against 1 241 MB for
+   `view`, which is the only reason a sheet over every photograph is reasonable to build.
+
+New persisted keys: `photos-grid-open`, `photos-grid-density`.
+
+### v0.4.17 - Compare: One Shared Transform, and 1:1 Means the Master (August 2026)
+
+**Stage F5** — findings in `shutterflow/docs/decisions/0009-compare-and-true-resolution.md`.
+
+1. **`GET /api/photos/original`** streams the master's own bytes — no cache, no re-encode —
+   behind an explicit magnification. **A full-resolution tier was costed and rejected**: median
+   620 ms of CPU per photo (186 ms decode + 435 ms encode) to produce a file 0.70x the source,
+   which is a re-encode of exactly the micro-contrast the magnification exists to judge.
+   **1:1 bites unconditionally here** — the shortest long edge in the library is 3 278 px and
+   **0 of 3 797** photographs are at or below the 2048 px `view` tier, so every magnification past
+   fit was magnifying a proxy. Resolved through `_resolve_in_roots` and additionally suffix-gated
+   to `{.jpg,.jpeg}`, which is what refuses a `.photo-edit` — the only copy of an edit history and
+   a file that must never reach a byte streamer.
+2. **`components/photos/photo-compare.tsx`** — N frames, one shared pan/zoom transform, always
+   shared rather than on a modifier: two frames at different magnifications of different regions
+   do not answer "which of these". `c` marks, `p` picks (keep this, reject the others), `MAX_COMPARE`
+   is 4. **2-up is free** (cells are height-limited, so each resolves to the size a single frame
+   would); the cost begins at three.
+3. **Two interaction defects fixed, both worth not re-deriving.** The wheel handler read the
+   *rendered* scale, so every event arriving before the next commit recomputed from the same stale
+   value: 6 notches paced one-per-render reached 3.00x, the same 6 dispatched in one task reached
+   **1.20x — a single notch**. A continuous gesture must read a ref and compose. And the
+   `trueResolution` master swap re-laid the viewer's `<img>` out at the bitmap's intrinsic size, a
+   **2.54–3.05x** geometry jump mid-inspection with scroll offsets not rebased; the box is now the
+   *display* geometry, which is what the compare stage always did.
+
+New persisted key: `photos-true-resolution` (default on). New hotkeys: `c`, `p`, `shift+Arrow/J/K`,
+`Escape`.
+
+### v0.4.16 - The Config Model: Two Files, Three Axes, and Validation as a Safety Feature (August 2026)
+
+**Stage F4** — the durable serialisation of what F1–F3 settled. `photo_flow/library_config.py`
+(new) plus `photo_flow/api/routes_config.py` (new) and a `photoflow config` CLI group.
+See "File Paths" above for the schema and the refusal list; what follows is the reasoning.
+
+1. **TWO files, and the split is a bootstrap fact plus a portability rule.** F1 put the
+   collection file next to the library and expected F4's roots to join it there. They
+   cannot: the roots table is what says where the library IS, so reading it from inside
+   the library needs the answer first. Something must be findable at a fixed path.
+   The rule that decides any future setting: **if the value would be wrong after copying
+   the library to another computer, it belongs to the install; otherwise to the library.**
+   A mount point and a volume name fail that test; a layout, a filename template and a
+   saved query pass it.
+2. **Strictness follows danger, and the two halves therefore fail differently.** A bad
+   install file is fatal and all-or-nothing — a half-read roots table is the one outcome
+   that could point `finalize` at a directory nobody named. A bad library file degrades
+   and reports, because nothing in it can point an operation anywhere AND because
+   `collections.py` already degrades on the same file; one file may not have two
+   contradictory failure modes.
+3. **No writer for the library file, and only a template writer for the install file.**
+   `config init` refuses to overwrite. F1 lost a `[library]` table to a writer that
+   re-emitted its own model; the fix is not a better writer, it is not having one. The
+   three axes were hand-added to the real `~/Pictures/photoflow.toml` and survived a live
+   collection create+delete **byte-identically** (md5 unchanged), which is F2's lossless
+   region writer doing exactly what it claimed with the tables it was claimed for.
+4. **`naming.template` is the serialisation of `timestamp_renamer`, not a new idea.**
+   `"%Y-%m-%d_%H-%M-%S{n}_{base}"` — strftime for the stamp, `{n}` for the collision
+   counter (empty, then -2, -3 …) exactly where `generate_timestamped_filename` puts it,
+   `{base}` for the camera's own stem. A test renders it and asserts
+   `2026-01-28_10-29-15_DSCF1234` / `2026-01-28_10-29-15-2_DSCF1234`.
+5. **`layout.mode = "as-is"` is 0003's open "no opinion" option, modelled.** It costs one
+   enum member and is the only on-ramp for a library whose owner does not want a tool
+   rearranging it.
+6. **The proof that defaults reproduce today's behaviour is the suite itself**: 627 tests
+   pass with no config file, and again with `~/.photoflow/config.toml` present holding the
+   rendered defaults — a subprocess diff of every resolved constant is identical either way.
+
+**F3-verify defects fixed in the same pass:** `_structure_month` had no malformed-timestamp
+guard where `_structure_event` did, so a `date_taken` the extractor could not parse (it
+stores the raw EXIF string) either 500'd the Month structure or produced a group whose own
+query resolves to zero rows — the invariant the whole endpoint exists to demonstrate.
+`scripts/structure_survey.py` indexed cluster bounds into the full row list while the
+clusters were built from the DATED subset (correct here only because this library has zero
+undated rows), and matched tags by plain substring rather than the pipe-sentinelled test
+`_clauses` uses. The structure query fired on every filter change even with the section
+closed; it is now `enabled: structureOpen` (verified live: the request disappears from the
+network log when the section is shut). `PhotoFolders`' docstring still described the
+deleted date tree.
+
+### v0.4.15 - Library Structures: Four Candidate Layouts, All of Them Queries (August 2026)
+
+**Prototype work for Shutterflow** (Stage F3; findings in
+`~/SourceRoot/shutterflow/docs/decisions/0003-library-config-two-axes.md`). The question is which
+way of arranging a photo library actually gets navigated by, and whether any of them has to be a
+directory. Nothing here moves a file.
+
+1. **`GET /api/photos/structure?kind=flat|month|album|event`** (`routes_photos.py`) returns one
+   candidate layout as a list of groups, and **every group carries the `PhotoFilters` mapping that
+   resolves to exactly its own photos** — the same mapping `POST /api/collections` stores. So a
+   folder is a `WHERE` clause and keeping one is a saved collection. Verified live: **71 of 71
+   groups** across all four kinds resolve to their own count against the real 3 797-row index.
+   - Each kind is computed with **its own dimension left open** (`STRUCTURE_DIMENSION`), the same
+     facet contract the option lists use — clicking March must not collapse the month list.
+   - `event` is a time-gap clustering over `date_taken`, `gap_seconds` = 2 days by default.
+     `MAX_EVENT_SCAN_ROWS` (250 000) makes a future library of a different order of magnitude fail
+     loudly rather than silently make the sidebar slow.
+   - `ungrouped` is the load-bearing number: `album` cannot place **2 555 of 3 797** photos. A
+     directory layout hides that by making you invent a `Misc/`.
+2. **UI: a `Structure` sidebar section** (`photo-structure.tsx`) — a four-way switch, the group
+   list as ordinary `FolderRow`s, and the three measurements on one line (groups · unplaced · ms).
+   The rows are deliberately the SAME component the two real directories use: if a derived group
+   and a physical folder are indistinguishable in use, the layout was never load-bearing.
+   New persisted keys `photos-section-structure`, `photos-structure-kind`,
+   `photos-structure-event-gap`. A group is a REFINE on **one** dimension
+   (`STRUCTURE_KIND_FIELDS`), so picking July keeps the folder you were in.
+3. **The client-derived date tree is gone from `photo-folders.tsx`.** It grouped at most
+   `DEFAULT_PHOTO_LIMIT` (2 000) LOADED rows against a 3 797-row library, so the oldest months
+   were silently missing. Months now come from the server over the whole set. `monthKey`/`yearKey`
+   are deleted.
+4. **`include_rejected` is no longer a dimension** (`VIEW_FIELDS` in `routes_photos.py`). It
+   WIDENS, and a widening flag has nothing for a precedence rule to arbitrate — mapping it to
+   `rating` made the sidebar's "Show rejected" switch DELETE a collection's rating filter (inside
+   Keepers: 172 rows → 2 364, every Final photo). View fields now compose by **OR** after the
+   dimension merge, and the funnel's three steps all apply them so they stay comparable. The
+   facets and the narrowing readout finally receive the flag too, so the card describes the set on
+   screen rather than the pre-toggle one.
+5. **A scope-sourced narrowing chip no longer carries a dead ✕.** `clearDimension` resets fields in
+   the REFINE layer, where a scope-supplied dimension was never set — inside a collection that was
+   every chip on the card. Scope chips now show a `scope` badge and say so in the tooltip.
+6. **`~/Pictures/photoflow.toml` is never overwritten when it cannot be parsed.** `read()` degraded
+   to empty on a syntax error and the next write then replaced the user's whole document with the
+   collections region. `Store.unreadable` + `StoreUnreadable` → the read still degrades (the
+   culling screen must not die over a typo) but the write refuses, surfaced as a **409**.
+7. **`scripts/structure_survey.py`** (new) — the F3 measurements, re-runnable, index opened
+   `mode=ro`. A measurement with no way to re-run it is an assertion.
+
+**Two findings worth carrying:** a time-gap clustering reproduces five of this library's seven
+hand-written album tags *exactly, with zero extra photos* — but never the two that are selections
+inside a trip (precision 0.03–0.12 at every grain). And the filename stamp equals `date_taken` on
+**3 797 of 3 797** rows, so a `YYYY/MM` directory tree would encode nothing the filename does not.
+451 → 564 tests.
+
+### v0.4.14 - The Narrowing Model: Scope + Refine, and Keywords as a Dimension (August 2026)
+
+Saved collections (v0.4.13-era prototype work) previously *replaced* the filter state. Now a
+collection is a **layer** you narrow inside, which forces a precedence rule.
+
+**The rule:** REFINE overrides SCOPE on a shared `_clauses` DIMENSION, and intersects with it on
+every other. Two layers, no third. The folder rail and the date tree are **not** a layer — they
+are dimensions (`root`, `date`), because a "folder" here is a column, not a place. Full table +
+rationale: `photo_flow/api/routes_photos.py` § "The narrowing model", and every row has a test in
+`tests/test_narrowing.py`. Findings live in `shutterflow/docs/decisions/0003`.
+
+1. **`compose(scope, refine)`** (`routes_photos.py`) merges into ONE effective `PhotoFilters`, so
+   `_where(effective, exclude=D)` is already `(scope\D) AND (refine\D)` and every existing
+   endpoint kept working unchanged. `QUERY_DIMENSIONS` maps each filter field to its dimension;
+   a test asserts it covers `PhotoFilters` exactly and emits only dimensions `_clauses` produces.
+2. **`?collection=<id>` on `/api/photos` and `/api/photos/facets`.** The SERVER composes — the
+   client names the scope only. An unknown id is a **404**, never a silent whole library.
+3. **`GET /api/photos/narrowing`** — per active dimension: the layer that supplied it, whether it
+   overrode a scope clause, and `without` (rows if that dimension were cleared). `without` uses
+   `without_dimension()` (reset the fields), **not** the facet's `exclude=`: `exclude` also drops
+   the default reject-hiding clause, which is right for a facet and a lie in a readout.
+4. **Keywords — schema v3.** `photos.keywords` holds the flat `XMP-dc:subject` set,
+   pipe-sentinelled (`|a|b|`), so an exact tag match is one `LIKE '%|a|%'`. `|` is safe because
+   decision 0004 reserves it as the hierarchy separator. NULL = not yet backfilled, and
+   `_reindex_root` re-reads such a row even when unchanged (the backfill has to ride the
+   incremental pass — rebuilding the DB would take the `trash` table with it). New `keyword`
+   filter (OR-set), facet, and `PhotoRow.keywords`.
+5. **UI:** new **Narrowing** sidebar card (funnel + one removable chip per dimension with its
+   `−N` cost, amber where it overrode the collection), `col=` search param, a `Keywords`
+   MultiSelect in Filters. New persisted key `photos-section-narrowing`.
+6. **`splitRootCounts` is gone.** It derived the second root count by subtraction, valid only
+   while nothing narrowed the library above the rail; under a scope it reported Staging 0 where
+   the answer was 11. Each root count — and "All" — is now an explicit facet query.
+7. **Collections store is now lossless** (`collections.py`). `_split_document` preserves every
+   line outside the `[[collections]]` region verbatim (other tables, comments), entries it cannot
+   model are quarantined rather than dropped, and query values are stored raw and cleaned at the
+   API boundary. The previous writer re-emitted only its own model, so one rename deleted every
+   other table in the file.
+8. **`QUERY_BOUNDS` is derived from the FastAPI dependency's own signature** — a stored
+   `rating_min = 99` was a 200 while `?rating_min=99` was a 422.
+
+533 tests (was 483).
+
 
 ### v0.4.13 - The Editor Hand-off: Open in Shutterflow (August 2026)
 

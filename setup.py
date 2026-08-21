@@ -6,7 +6,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="photo-flow",
-    version="0.4.13",
+    version="0.4.19",
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
@@ -19,6 +19,9 @@ setup(
         "fastapi>=0.115",
         "uvicorn[standard]>=0.32",
         "sse-starlette>=2.1",
+        # tomllib is stdlib from 3.11; tomli IS tomllib (same author, same API)
+        # backported. Reads photoflow.toml in photo_flow/{collections,library_config}.py.
+        'tomli>=2.0; python_version < "3.11"',
     ],
     extras_require={
         "dev": [
