@@ -90,7 +90,12 @@ Then `caddy-reload` and commit in dotfiles.
 - Copy videos (.MOV) to external SSD
 - Sync high-rated photos (rating ≥ 4) to a gallery with intelligent file handling
 - Cull in the control panel — browse Final and Staging full-screen, filter on any EXIF field, rate
-  with the number keys, and soft-delete to a restorable trash
+  with the number keys, reject and undo without moving a file, and compare or grid-review a
+  whole result set
+- Save a filter state as a collection, or browse a computed structure (month/album/event) —
+  neither moves anything on disk
+- Hand a photo to a configured external editor, JPEG or its correlating RAW, straight from the
+  culling screen
 - Hash-based duplicate detection and post-copy verification
 - Dry-run mode for import, cleanup, and sync-gallery
 - Confirmation prompts for destructive actions
@@ -252,43 +257,103 @@ photoflow trash purge --days 60
 Open the control panel (`photoflow serve` → http://127.0.0.1:7717) and pick **Photos** under
 Workflow. It replaces a Bridge culling session:
 
-- **One sidebar, on the right**, and nothing in it but four collapsible cards: **Folders**,
-  **Filters**, **Info** (stars, colour label, EXIF) and **View**. Each remembers whether you left
-  it open, caps at 44% of the window height and scrolls inside itself, so opening one never pushes
-  the others away — and since they are cards on the page rather than slices of a panel, the chrome
-  ends where its content does. Drag the sidebar's left edge to resize it. The only thing floating
-  over the image is the position counter and the button that hides the sidebar.
+- **One sidebar, on the right**, nothing in it but collapsible cards — **Narrowing**, **Folders**
+  (with saved collections directly under the roots), **Structure**, **Filters**, **Info**,
+  **Compare**, **Tools**, **Cull** and **View**. Each remembers whether you left it open, caps at
+  44% of the window height and scrolls inside itself, so opening one never pushes the others away.
+  Drag the sidebar's left edge to resize it. The only thing floating over the image is the position
+  counter and the button that hides the sidebar.
 - **Everything else is the photograph.** The screen runs edge to edge — no page gutter, no page
-  scrollbar — and the filmstrip spans the full window width underneath, nav rail included, so the
-  timeline is as long as the window is wide.
-- **Browse** Final and Staging side by side, with a date tree (year → month) for jumping around.
+  scrollbar — and the filmstrip spans the full window width underneath, nav rail included.
+- **Browse** Final and Staging side by side, with **Folders** for the physical roots and
+  **Structure** for a computed layout (flat / month / album / event) — every group is a query, so
+  nothing on disk moves and a photo that fits no album still shows up somewhere.
+- **Narrow in two layers.** A folder or a saved **collection** *scopes* the library; the **Filters**
+  card *refines* inside it — refine overrides scope on a shared field (pick a different rating
+  inside a "5-star" collection) and intersects on every other. The **Narrowing** card lists what's
+  currently applied, what supplied it, and what removing it would cost in row count. **Save the
+  current filter state as a collection** from the Folders card to come back to it later; collections
+  live in `~/Pictures/photoflow.toml`, next to the library.
 - **Filter** on anything the EXIF carries — rating, ISO, aperture, shutter, focal length, camera,
-  lens, colour label, filename. Each filter shows live counts, and an option that would return
-  nothing is never offered.
+  lens, colour label, keyword, filename. Each filter shows live counts (with a histogram for the
+  numeric ones), and an option that would return nothing is never offered.
 - **Rate** with `0`–`5`. The star is written straight into the JPG as `XMP-xmp:Rating` via
-  exiftool, so `sync-gallery` and Immich pick it up with no extra step. Note that Photomator is
-  the other writer of that tag — rate in one place per photo, not both.
+  exiftool, so `sync-gallery` and Immich pick it up with no extra step. Photomator is the other
+  writer of that tag — rate in one place per photo, not both. **Every rating write is undoable**:
+  `⌘Z` restores whatever it overwrote, and a write past 20 frames asks for confirmation first,
+  naming how many frames actually carry a different value.
+- **Reject** with `x` (or `⌫`/`Delete`) instead of rating — the photo dims in the strip and drops
+  out of the default view on the next refetch, but **nothing moves on disk**. Pressing the key
+  again un-rejects. The **Cull** card shows the reject count and a "Show rejected" switch; only its
+  **"Move rejects to trash…"** button actually files them, behind a confirm.
+- **Trash** is therefore a deliberate, batched step, not a keypress — restore what it moved with
+  `photoflow trash restore` (see above).
 - **Step** with `←`/`→` (or `j`/`k`). Neighbours are pre-rendered and pre-decoded, so the next
   frame is already on screen; a warm thumbnail serves in ~2 ms.
-- **Cull** with `⌫` — the photo moves to trash and the view advances. `⌘Z`, or the Undo in the
-  toast, puts it back.
-- `i` toggles the sidebar, `f` the filmstrip, `z` 1:1 zoom.
+- **Compare** up to 4 frames on one shared zoom/pan transform — `c` compares the current frame with
+  its neighbour, `shift`+arrows grow the set, `cmd`/`ctrl`-click a filmstrip frame to add a
+  non-adjacent one, `p` picks the focused frame as keeper and rejects the rest, `Esc` leaves. Above
+  the 2048px thumbnail tier, 1:1 serves the master's own bytes (`GET /api/photos/original`), not an
+  upscaled proxy.
+- **Contact sheet** (`g`) — a virtualized grid over the entire result set, density adjustable with
+  `[`/`]`. Selection is the same marked set compare uses: `shift`-click a range, `cmd`/`ctrl`-click
+  to toggle, then a rating key writes to everyone selected — the one place on this screen a single
+  keystroke broadcasts.
+- **Edit** with `e`, the Tools card, or right-click the photograph — hands the JPG (or, for RAW
+  developers, its correlating RAF) to a configured external editor. It's a launch, not a write:
+  photo-flow doesn't wait for it or learn what changed, and the edit shows up on the next reindex
+  the same way a Photomator edit does. Configure editors under `[[editors]]` in
+  `~/.photoflow/config.toml` (see Configuration below); with none configured the button says so.
+- `i` toggles the sidebar, `f` the filmstrip, `z` 1:1 zoom, `⌘Z` inverts the last action (trash or
+  rating, whichever happened last).
 
 Thumbnails are cached under `~/.photoflow/thumbs`. That directory is derived and disposable —
 deleting it costs nothing but regeneration.
 
 ## Configuration
 
-Edit paths in `photo_flow/config.py` to match your system:
-```python
-from pathlib import Path
+Paths default to the literals below, hardcoded in `photo_flow/config.py`. To override them without
+touching source, drop an optional `~/.photoflow/config.toml` — machine facts: library roots,
+`[[cameras]]`, `[[editors]]`. A second, optional file lives *inside* the library
+(`<library root>/photoflow.toml` — by default `~/Pictures/photoflow.toml`) and holds facts about
+the photographs themselves: saved collections and three organisation axes (stage/layout/naming)
+that are accepted and validated but currently **inert** — no operation reads a non-default value
+yet, so setting one does nothing. It travels if you copy the library to another machine; the
+install file does not.
 
+```bash
+photoflow config show    # resolved roots, cameras, organisation axes — and where each came from
+photoflow config check   # validate both files; non-zero exit on a problem
+photoflow config init    # write ~/.photoflow/config.toml holding exactly today's defaults
+```
+
+`config init` refuses to overwrite an existing file. A bad install file is fatal (the daemon won't
+start rather than run against a guessed tree); a bad library file degrades to defaults and reports.
+Roots are refused by containment, not a blocklist — no `/`, `/Users`, `/Volumes`, `/System`,
+`~/.ssh`, or anything inside/under one of those, checked on the fully resolved path. This exists
+because `sync-gallery` publishes rating≥4 JPGs under `FINAL_PATH` to a public host — a mistyped
+root is a data-exfiltration bug, not just a wrong-folder bug.
+
+To hand photos to an external editor from the Photos screen's Tools card, add one row per
+application under `[[editors]]`:
+
+```toml
+[[editors]]
+id = "shutterflow"
+name = "Shutterflow"
+app = "Shutterflow"       # macOS application name, resolved via `open -a` — not a path
+handles = ["jpeg"]        # or ["raw"], or both for an app that does both
+```
+
+Defaults, byte-identical to the pre-v0.4.16 hardcoded literals:
+```python
 CAMERA_PATH = Path("/Volumes/Fuji X-T4/DCIM")
 STAGING_PATH = Path("/Users/johannes.krumm/Pictures/Staging")
 RAWS_PATH = Path("/Volumes/EXT/Bilder/RAWs")
 FINAL_PATH = Path("/Users/johannes.krumm/Pictures/Final")
 SSD_PATH = Path("/Volumes/EXT/Videos/Videos")
 GALLERY_PATH = Path("/Users/johannes.krumm/SourceRoot/photo-flow/photo_gallery/src")
+TRASH_PATH = Path("/Users/johannes.krumm/Pictures/.photoflow-trash")
 
 # Remote backup (homelab) - via Tailscale
 HOMELAB_USER = "jkrumm"
@@ -300,6 +365,9 @@ RSYNC_SSH_CMD = "ssh -T -c aes128-gcm@openssh.com -o Compression=no -o ConnectTi
 
 EXTENSIONS = {'.JPG', '.RAF', '.MOV'}
 ```
+
+`RAWS_PATH` is deliberately not reachable from any culling-screen endpoint except the read-only
+RAW hand-off — see SAFETY.md.
 
 ## Output Examples
 

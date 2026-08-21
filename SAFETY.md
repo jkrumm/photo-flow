@@ -48,7 +48,6 @@ This project implements a **safety-first architecture** designed to prevent data
 
 ### 8. Verification at Every Step
 - Hash comparison after every file copy
-- Image integrity verification after compression
 - Metadata verification after processing
 - File system validation before destructive operations
 
@@ -76,6 +75,75 @@ so it is the one path that must be reversible:
 Derived data has no such protection and needs none: `~/.photoflow/thumbs` and `~/.photoflow/index.db`
 are both rebuildable from the photos themselves.
 
+### 10. Undoable Ratings, and a Gate on Broadcast Writes (v0.4.19)
+Rating is not a side effect of culling — it is the entire output of a cull pass, and Photomator
+treats the embedded `XMP-xmp:Rating` tag as its single source of truth. A batched write that runs
+`exiftool -overwrite_original -XMP-xmp:Rating=N` across a multi-frame selection with no inverse is
+a data-loss defect, not a convenience gap: one wrong keystroke over a large selection destroys
+unrecoverable judgement. This was found by adversarial review of the compare/contact-sheet work
+(v0.4.17–18), which had wired batch rating writes with exactly that gap.
+
+- **Every rating write returns what it overwrote.** `POST /api/photos/rating` reads and returns
+  each touched path's prior rating **unconditionally**, not gated on batch size — the client can
+  always build the exact inverse, not only above some size guess.
+- **`POST /api/photos/rating/undo` is the inverse**, restoring each path to its own prior value.
+  Paths are grouped by target rating (at most 7 `exiftool` calls — the whole -1..5 range —
+  regardless of batch size). A group whose write fails reports every path in that group in
+  `failed_paths` rather than guessing which ones actually failed: an undo would rather over-report
+  a failure than tell the caller it landed when it didn't.
+- **`⌘Z` inverts whichever action happened last**, trash or rating — the SPA tracks a single
+  `UndoableAction`, not a trash-only ref.
+- **A write past 20 frames is gated behind a confirm** naming the count and how many of the
+  selected frames currently carry a *different* rating (the number that would actually be
+  overwritten). The confirm names `⌘Z` as the secondary safeguard — the load-bearing one is that
+  the write is undoable at all, at any size.
+
+### 11. The Library-Config Root Guard — Validation as a Safety Feature (`library_config.py`, v0.4.19)
+A hand-edited `~/.photoflow/config.toml` can repoint any library root, and `sync_gallery` rsyncs
+every rating≥4 JPG under `FINAL_PATH` to a **public** host — so a mistyped root doesn't just point
+an operation at the wrong folder, it can turn a routine publish into exfiltration of an entire home
+directory. The guard refuses by containment, not a blocklist:
+
+- Refuses a **container directory** (`/`, `/Users`, `/Volumes`, `/home`, `/mnt`, `/media`, `/net`,
+  `/System/Volumes`) or any **direct child** of one, and anything **at any depth** inside a system
+  or credential tree (`/System`, `/Library`, `/usr`, `/private`, `~/Library`, `~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.config`, `~/.local`).
+- Paths are fully **resolved** (`~`, `..`, symlinks) *before* the check, and compared **casefolded
+  per component** — macOS's default filesystem is case-insensitive and `realpath` does not
+  normalise case, so a check against the raw path can pass while the operation walks a differently
+  cased match.
+- The guard runs over the **assembled** roots, not only the ones a config file names explicitly —
+  a root derived from a camera profile (`volume = "EXT"`, `dcim = "."`) is checked too, because
+  `import` deletes originals from wherever it points.
+- **Refusal is fatal.** No partial application, no silent fallback to a default — a silent
+  fallback means the operator believes an operation ran against the configured tree when it ran
+  against another.
+
+`library_root_refusal()` is a looser, second tier for `library.root` itself (minus the containment
+clause), so a library deliberately sitting at the top of a dedicated disk (`/Volumes/Photos`) stays
+expressible.
+
+### 12. The RAW Hand-off Is Read-Only and Outside the Shared Allowlist (`raw_link.py`, v0.4.19)
+`RAWS_PATH` is deliberately **not** in `CULL_ROOTS` / `_allowed_roots` — the allowlist every other
+client-supplied path in the culling API goes through. Several of that allowlist's consumers are
+destructive (rating and label write-back run `exiftool -overwrite_original`; trash moves the file),
+so widening it to include the RAW archive would make an irreplaceable RAF newly writable and
+trashable through endpoints that have no reason to ever address one. Instead:
+
+- `photo_flow/raw_link.py` is the **one** module allowed to resolve a path into the RAW archive on
+  behalf of an HTTP request, and it is read-only by construction — every function returns a `Path`
+  or refuses to; none opens, moves, writes, or deletes one.
+- It takes a JPG path **already validated** against the ordinary culling roots and derives the
+  correlating RAF itself; it never accepts a RAW path from a client.
+- Correlation uses `timestamp_renamer.correlation_base` (Photomator `_2`/`_3`-suffix tolerant),
+  never `extract_original_base` — the latter's mismatch on a suffixed duplicate export is the
+  exact bug class that has previously exposed irreplaceable RAWs to deletion elsewhere in this
+  codebase (see the v0.4.1 changelog entry in CLAUDE.md).
+
+**Not yet exercised against real hardware.** `/Volumes/EXT` is unmounted on the development
+machine, so no real RAF has ever been handed to a real RAW developer through this path — only a
+monkeypatched `open` call and a relocated root have been tested.
+
 ## Implementation Examples
 
 ### Safe File Copy (`file_manager.py`)
@@ -96,7 +164,12 @@ def safe_copy(src, dst):
     return True, ""
 ```
 
-### Safe Image Compression (`image_processor.py`)
+### Safe Image Compression (`image_processor.py`) — retained for reference, not called
+`finalize` has done a verified full-quality copy since v0.3.4 (Photomator bakes edits and the
+rating into the Staging JPG before it ever reaches this pipeline, so re-compressing at finalize
+only added generation loss). No command in the current pipeline calls this module; the pattern
+below is kept as a reference for the backup/restore idiom it demonstrates, not as a description of
+what finalize does today.
 ```python
 def compress_jpeg_safe(input_path):
     # 1. Create compressed version in temporary file
@@ -152,7 +225,7 @@ Run operations with `--dry-run` first to preview changes:
 
 ```bash
 photoflow import --dry-run      # Preview file operations
-photoflow finalize --dry-run    # Preview compression + moves
+photoflow finalize --dry-run    # Preview the copy-then-delete moves
 photoflow backup --dry-run      # Preview network operations
 ```
 

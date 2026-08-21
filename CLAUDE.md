@@ -1090,7 +1090,10 @@ pipx uninstall photo-flow
    at import and never follows `INSTALL.active_camera()`, so `config show` can name one body
    while `import` reads another. Do not treat this row as done.
 2. **No progress persistence**: Interrupted operations start from beginning
-3. **No undo mechanism**: Operations are permanent (dry-run recommended)
+3. **Undo is a culling-screen feature, not a pipeline one**: trash (`photoflow trash restore`,
+   ⌘Z) and rating writes (`POST /api/photos/rating/undo`, ⌘Z) are reversible. The pipeline verbs
+   — import, finalize, backup, sync-gallery — have no inverse; dry-run remains the only way to
+   preview them before committing.
 4. **Hash algorithm**: MD5 is fast but not cryptographically secure (sufficient for duplicate detection)
 5. **Personal tool**: Designed for single-user local execution, not production deployment
 
