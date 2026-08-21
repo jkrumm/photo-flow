@@ -331,3 +331,39 @@ export type PipelineStatus = {
     cleanup: LastRun
   }
 }
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+/** Which kind of file an external application can be handed. */
+export type EditorKind = 'jpeg' | 'raw'
+
+/**
+ * One external application the culling view may hand a file to — a row from
+ * `[[editors]]` in `~/.photoflow/config.toml`, or the single default when that file
+ * names none. `installed` is advisory (a bundle in a folder the resolver doesn't scan
+ * still launches fine via Launch Services); it is never what gates a launch.
+ */
+export type EditorProfile = {
+  id: string
+  name: string
+  app: string
+  handles: EditorKind[]
+  installed: boolean
+}
+
+export type InstallConfigResponse = {
+  path: string
+  present: boolean
+  library_root: string
+  roots: Record<string, string>
+  active_camera: string
+  editors: EditorProfile[]
+}
+
+export type ConfigResponse = {
+  install: InstallConfigResponse
+  library: Record<string, unknown>
+  valid: boolean
+  errors: string[]
+  unimplemented: string[]
+}

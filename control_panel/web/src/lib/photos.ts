@@ -26,8 +26,23 @@ export const MAX_WARM_PATHS = 200
 /** Server-side cap on the rating / label / trash batch endpoints (`MAX_WRITE_PATHS`). */
 export const MAX_WRITE_PATHS = 500
 
-/** Default page size of `GET /api/photos` (server default; max is 10000). */
-export const DEFAULT_PHOTO_LIMIT = 2000
+/**
+ * Page size of `GET /api/photos` — the server's own maximum, deliberately.
+ *
+ * It was 2 000, the endpoint's default, and nothing on the screen could see the
+ * truncation: the filmstrip only ever needs a neighbourhood, so a result set clipped at
+ * 2 000 of 3 515 rows looked exactly like a result set of 2 000. **The contact sheet made
+ * it visible in one flick** — scrolling to the bottom of an unfiltered library landed on
+ * row 2 000 with 1 515 photographs simply absent.
+ *
+ * Measured cost of asking for all of them against the real library: 1.81 MB and 78 ms,
+ * versus 1.03 MB and 93 ms for the old page. Trivially worth it here — and worth writing
+ * down as the one thing about this screen that does not generalise. A contact sheet needs
+ * the whole ordered set, so at 100k rows this becomes a windowed list endpoint (or an
+ * ordered id vector plus a row range), which is a real difference between a grid and a
+ * strip rather than a tuning constant.
+ */
+export const DEFAULT_PHOTO_LIMIT = 10000
 
 // ── Wire types ───────────────────────────────────────────────────────────────
 
@@ -55,6 +70,8 @@ export type PhotoRow = {
   root: string
   rating: number | null
   label: string
+  /** Flat `XMP-dc:subject` tag set. A tag is a filter dimension, not an album type. */
+  keywords: string[]
   orientation: string | null
   width: number | null
   height: number | null
@@ -105,6 +122,8 @@ export type Facets = {
   orientations: Record<string, number>
   camera_models: FacetValue[]
   lens_models: FacetValue[]
+  /** Distinct keywords in view, most used first — the "albums" the library already has. */
+  keywords: FacetValue[]
   iso: RangeFacet
   focal: RangeFacet
   aperture: RangeFacet
@@ -126,6 +145,25 @@ export type WriteResult = {
   messages: string[]
 }
 
+/**
+ * The rating write's own result, plus what every touched path carried before the
+ * write — keyed by the exact path string sent in the request. This is what makes a
+ * rating broadcast undoable: without it, a wrong star value overwrites every prior
+ * judgement with nothing left to restore it from.
+ */
+export type RatingWriteResult = WriteResult & {
+  previous: Record<string, number>
+}
+
+/** The inverse of a rating write — restore each path to a rating it held before. */
+export type RatingRestoreResult = {
+  restored: number
+  errors: number
+  /** Paths whose restore could not be confirmed successful — reported, never guessed away. */
+  failed_paths: string[]
+  messages: string[]
+}
+
 /** Entry stub echoed by `POST /api/photos/trash`. `id` is null on a dry run. */
 export type TrashedEntry = {
   id: number | null
@@ -142,16 +180,21 @@ export type TrashResult = {
 }
 
 /**
- * The result of handing a photo to the external editor.
+ * The result of handing a photo — or the RAW that correlates to it — to an external
+ * application.
  *
- * `opened: false` is a normal answer, not an error: the editor is optional and a machine
- * without it installed must say so plainly rather than surface a 500.
+ * `opened: false` is a normal answer, not an error: the target application is optional
+ * (or, for a RAW, may simply not exist for this shot) and a machine without it must say
+ * so plainly rather than surface a 500.
  */
 export type OpenInEditorResult = {
   opened: boolean
   editor: string
   message: string
 }
+
+/** Which file `openInEditor` hands over — re-exported so the route needn't import from api-types. */
+export type { EditorKind, EditorProfile } from './api-types'
 
 /** How many photos are flagged rejected and awaiting the batch purge. */
 export type RejectSummary = {
@@ -236,6 +279,8 @@ export type PhotoFilters = {
   /** Filename substring; matched with LIKE, wildcards escaped server-side. */
   q: string | null
   has_sidecar: boolean | null
+  /** OR-set of exact `dc:subject` tags. */
+  keyword: string[]
   sort: PhotoSort
   order: SortOrder
 }
@@ -261,6 +306,7 @@ export const DEFAULT_FILTERS: PhotoFilters = {
   date_to: null,
   q: null,
   has_sidecar: null,
+  keyword: [],
   sort: 'date_taken',
   order: 'asc',
 }
@@ -286,6 +332,7 @@ const FILTER_KEYS = [
   'date_to',
   'q',
   'has_sidecar',
+  'keyword',
 ] as const satisfies readonly (keyof PhotoFilters)[]
 
 function isSet(value: PhotoFilters[keyof PhotoFilters]): boolean {
@@ -392,7 +439,12 @@ export function normalizeFilters(raw: unknown): PhotoFilters {
   const src = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
   return {
     root: asOneOf(src.root, PHOTO_ROOTS),
-    rating: asNumberList(src.rating).filter((n) => n >= 0 && n <= 5),
+    // REJECTED (-1) is inside the accepted range on purpose. It is a third cull state,
+    // not a sub-zero star count, the server has accepted it since v0.4.12, and a saved
+    // collection ("Rejects") is the first thing in the UI that can ask for it by name.
+    // Clamping it away here would let the API store a query the client silently widens
+    // to the whole library — a filter named Rejects showing 3 797 photos.
+    rating: asNumberList(src.rating).filter((n) => n >= REJECTED && n <= 5),
     rating_min: asNumber(src.rating_min),
     label: asStringList(src.label),
     orientation: asOneOf(src.orientation, ORIENTATIONS),
@@ -410,6 +462,7 @@ export function normalizeFilters(raw: unknown): PhotoFilters {
     date_to: asString(src.date_to),
     q: asString(src.q),
     has_sidecar: asBoolean(src.has_sidecar),
+    keyword: asStringList(src.keyword),
     sort: asOneOf(src.sort, PHOTO_SORTS) ?? DEFAULT_FILTERS.sort,
     order: asOneOf(src.order, SORT_ORDERS) ?? DEFAULT_FILTERS.order,
   }
@@ -468,6 +521,7 @@ export function toQueryParams(filters: PhotoFilters): URLSearchParams {
   append('date_to', filters.date_to)
   append('q', filters.q)
   append('has_sidecar', filters.has_sidecar)
+  for (const value of filters.keyword) append('keyword', value)
   append('sort', filters.sort)
   append('order', filters.order)
 
@@ -490,6 +544,22 @@ export function withQuery(path: string, params: URLSearchParams): string {
 export function thumbUrl(row: Pick<PhotoRow, 'path' | 'mtime'>, tier: ThumbTier): string {
   const params = new URLSearchParams({ path: row.path, tier, v: String(row.mtime) })
   return `${BASE}${PHOTOS_API}/thumb?${params.toString()}`
+}
+
+/** Long-edge pixel target of each tier — must match `config.THUMB_SIZES`. */
+export const THUMB_LONG_EDGE: Record<ThumbTier, number> = { grid: 320, view: 2048 }
+
+/**
+ * URL of the master's own bytes.
+ *
+ * NOT a tier: no cache, no re-encode, 0.43–21.7 MB on the wire (median 7.3 MB over the
+ * 3 797 present rows) and a ~104 MB bitmap once decoded. Request it only behind an explicit zoom, never from the prewarm ring — see
+ * `photos_original` in `routes_photos.py` for why a full-resolution *tier* would be the
+ * wrong answer to the same question.
+ */
+export function originalUrl(row: Pick<PhotoRow, 'path' | 'mtime'>): string {
+  const params = new URLSearchParams({ path: row.path, v: String(row.mtime) })
+  return `${BASE}${PHOTOS_API}/original?${params.toString()}`
 }
 
 // ── Display helpers ──────────────────────────────────────────────────────────
@@ -523,12 +593,3 @@ export function orientationFacetCount(
   return facets?.orientations[orientation] ?? 0
 }
 
-/** `YYYY-MM` group key for the date rail; null when the photo has no capture date. */
-export function monthKey(row: Pick<PhotoRow, 'date_taken'>): string | null {
-  return row.date_taken ? row.date_taken.slice(0, 7) : null
-}
-
-/** `YYYY` group key for the date rail; null when the photo has no capture date. */
-export function yearKey(row: Pick<PhotoRow, 'date_taken'>): string | null {
-  return row.date_taken ? row.date_taken.slice(0, 4) : null
-}

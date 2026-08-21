@@ -36,7 +36,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import photo_flow.api.routes_photos as photos_mod
-from photo_flow import config
+from photo_flow import config, library_config
 from photo_flow.api.app import create_app
 from photo_flow.index import db as db_mod
 from photo_flow.index import indexer as indexer_mod
@@ -731,6 +731,131 @@ class TestThumb:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/photos/original — the true-1:1 escape hatch
+# ---------------------------------------------------------------------------
+
+class TestOriginal:
+    """
+    The one endpoint that streams a file from the library byte for byte.
+
+    Two things are therefore asserted harder than anywhere else: that the bytes are
+    the master's own (a re-encode would defeat the purpose — sharpness is exactly what
+    JPEG quantisation attenuates), and that nothing but a JPEG can leave through it.
+    """
+
+    def test_serves_the_masters_own_bytes(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG", size=(900, 600))
+
+        resp = client.get("/api/photos/original", params={"path": str(photo)})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/jpeg"
+        assert resp.content == photo.read_bytes(), "the master must not be re-encoded"
+
+    def test_is_immutable_and_content_addressed(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG")
+
+        resp = client.get("/api/photos/original", params={"path": str(photo)})
+
+        assert resp.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert resp.headers["etag"] == f'"{photos_mod._original_etag(photo.resolve())}"'
+
+    def test_etag_differs_from_the_thumbnail_of_the_same_file(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG")
+
+        original = client.get("/api/photos/original", params={"path": str(photo)})
+        thumb = client.get("/api/photos/thumb", params={"path": str(photo), "tier": "view"})
+
+        assert original.headers["etag"] != thumb.headers["etag"]
+
+    def test_conditional_request_returns_304(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG")
+        first = client.get("/api/photos/original", params={"path": str(photo)})
+
+        second = client.get(
+            "/api/photos/original",
+            params={"path": str(photo)},
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+
+        assert second.status_code == 304
+        assert second.content == b""
+
+    def test_a_rewritten_master_gets_a_new_etag(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG", size=(400, 300))
+        before = client.get("/api/photos/original", params={"path": str(photo)}).headers["etag"]
+
+        _make_jpeg(env["final"], "o.JPG", size=(500, 300))
+
+        after = client.get("/api/photos/original", params={"path": str(photo)}).headers["etag"]
+        assert before != after
+
+    def test_staging_master_is_servable(self, client, env):
+        photo = _make_jpeg(env["staging"], "s.JPG")
+
+        assert client.get(
+            "/api/photos/original", params={"path": str(photo)}
+        ).status_code == 200
+
+    def test_a_sidecar_inside_a_root_is_refused(self, client, env):
+        """
+        The root allowlist alone would hand over a `.photo-edit` — 17 MB of the only
+        copy of an edit history — because it sits right beside the JPG it belongs to.
+        """
+        photo = _make_jpeg(env["final"], "o.JPG")
+        sidecar = photo.with_suffix(config.EDIT_SIDECAR_SUFFIX)
+        sidecar.write_bytes(b"edit history")
+
+        resp = client.get("/api/photos/original", params={"path": str(sidecar)})
+
+        assert resp.status_code == 400
+        assert b"edit history" not in resp.content
+
+    @pytest.mark.parametrize("name", ["notes.txt", "archive.zip", "raw.RAF"])
+    def test_only_jpegs_leave_through_it(self, client, env, name):
+        victim = env["final"] / name
+        victim.write_bytes(b"not a photograph")
+
+        resp = client.get("/api/photos/original", params={"path": str(victim)})
+
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize("attack", [
+        "../../.ssh/id_rsa",
+        "/etc/passwd",
+        "~/.ssh/id_ed25519",
+        "",
+    ])
+    def test_rejects_out_of_root_paths(self, client, library, attack):
+        assert client.get(
+            "/api/photos/original", params={"path": attack}
+        ).status_code == 400
+
+    def test_traversal_back_out_of_a_root_is_rejected(self, client, env):
+        _make_jpeg(env["outside"], "secret.JPG")
+        traversal = str(env["final"] / ".." / "secret.JPG")
+
+        assert client.get(
+            "/api/photos/original", params={"path": traversal}
+        ).status_code == 400
+
+    def test_missing_source_is_404(self, client, env):
+        resp = client.get(
+            "/api/photos/original", params={"path": str(env["final"] / "ghost.JPG")}
+        )
+
+        assert resp.status_code == 404
+
+    def test_cache_buster_is_ignored_server_side(self, client, env):
+        photo = _make_jpeg(env["final"], "o.JPG")
+
+        a = client.get("/api/photos/original", params={"path": str(photo), "v": "1"})
+        b = client.get("/api/photos/original", params={"path": str(photo), "v": "2"})
+
+        assert a.headers["etag"] == b.headers["etag"]
+
+
+# ---------------------------------------------------------------------------
 # GET /api/photos/meta
 # ---------------------------------------------------------------------------
 
@@ -898,6 +1023,147 @@ class TestWriteBack:
 
         assert result["errors"] == 1
         assert "timed out" in result["messages"][0]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/photos/rating — prior-value capture, and its inverse
+# ---------------------------------------------------------------------------
+
+class TestRatingUndo:
+    """
+    A rating write is destructive: exiftool overwrites the tag in place. `previous`
+    on the write response, and `/rating/undo`, are what make a broadcast reversible.
+    """
+
+    def test_write_returns_prior_ratings(self, client, env, monkeypatch):
+        monkeypatch.setattr(photos_mod.subprocess, "run", _ExiftoolRecorder())
+        a = _make_jpeg(env["final"], "a.JPG")
+        b = _make_jpeg(env["final"], "b.JPG")
+        _seed(env, filename="a.JPG", rating=5)
+        _seed(env, filename="b.JPG", rating=2)
+
+        resp = client.post(
+            "/api/photos/rating", json={"paths": [str(a), str(b)], "rating": 1}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["previous"] == {str(a): 5, str(b): 2}
+
+    def test_unindexed_path_defaults_previous_to_zero(self, client, env, monkeypatch):
+        monkeypatch.setattr(photos_mod.subprocess, "run", _ExiftoolRecorder())
+        photo = _make_jpeg(env["final"], "stranger.JPG")
+
+        resp = client.post("/api/photos/rating", json={"paths": [str(photo)], "rating": 4})
+
+        assert resp.json()["previous"] == {str(photo): 0}
+
+    def test_undo_writes_each_path_back_to_its_own_prior_value(self, client, env, monkeypatch):
+        recorder = _ExiftoolRecorder()
+        monkeypatch.setattr(photos_mod.subprocess, "run", recorder)
+        a = _make_jpeg(env["final"], "a.JPG")
+        b = _make_jpeg(env["final"], "b.JPG")
+
+        resp = client.post(
+            "/api/photos/rating/undo",
+            json={"items": [{"path": str(a), "rating": 5}, {"path": str(b), "rating": 2}]},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["restored"] == 2
+        assert body["errors"] == 0
+        assert body["failed_paths"] == []
+        # Different targets -> different exiftool tag values -> one process per group.
+        assert len(recorder.calls) == 2
+        joined = [" ".join(call) for call in recorder.calls]
+        assert any("-XMP-xmp:Rating=5" in c and str(a) in c for c in joined)
+        assert any("-XMP-xmp:Rating=2" in c and str(b) in c for c in joined)
+
+    def test_undo_groups_by_value_not_by_photo(self, client, env, monkeypatch):
+        recorder = _ExiftoolRecorder()
+        monkeypatch.setattr(photos_mod.subprocess, "run", recorder)
+        photos = [_make_jpeg(env["final"], f"g{i}.JPG") for i in range(5)]
+
+        resp = client.post(
+            "/api/photos/rating/undo",
+            json={"items": [{"path": str(p), "rating": 3} for p in photos]},
+        )
+
+        assert resp.json()["restored"] == 5
+        assert len(recorder.calls) == 1, "same target rating must batch into one process"
+
+    def test_undo_reports_the_failed_group_paths(self, client, env, monkeypatch):
+        a = _make_jpeg(env["final"], "ok.JPG")
+        b = _make_jpeg(env["final"], "boom.JPG")
+
+        def selective_failure(cmd, **kwargs):
+            if "-XMP-xmp:Rating=2" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=1, stdout="", stderr="exiftool exploded"
+                )
+            file_count = sum(1 for arg in cmd if not arg.startswith("-") and arg != "exiftool")
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout=f"    {file_count} image files updated\n", stderr=""
+            )
+
+        monkeypatch.setattr(photos_mod.subprocess, "run", selective_failure)
+
+        resp = client.post(
+            "/api/photos/rating/undo",
+            json={"items": [{"path": str(a), "rating": 5}, {"path": str(b), "rating": 2}]},
+        )
+
+        body = resp.json()
+        assert body["restored"] == 1
+        assert body["errors"] == 1
+        assert body["failed_paths"] == [str(b)]
+        assert body["messages"], "a partial undo must say what went wrong"
+
+    def test_undo_never_reports_success_it_cannot_back_up(self, client, env, monkeypatch):
+        """Every path must be conservatively failed rather than silently dropped."""
+        photo = _make_jpeg(env["final"], "fail.JPG")
+        monkeypatch.setattr(
+            photos_mod.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                args=cmd, returncode=1, stdout="", stderr="boom"
+            ),
+        )
+
+        resp = client.post(
+            "/api/photos/rating/undo", json={"items": [{"path": str(photo), "rating": 3}]}
+        )
+
+        body = resp.json()
+        assert body["restored"] == 0
+        assert body["errors"] == 1
+        assert body["failed_paths"] == [str(photo)]
+
+    def test_undo_empty_batch_is_rejected(self, client, env):
+        assert client.post("/api/photos/rating/undo", json={"items": []}).status_code == 400
+
+    def test_undo_oversized_batch_is_rejected(self, client, env):
+        items = [
+            {"path": str(env["final"] / f"p{i}.JPG"), "rating": 3}
+            for i in range(photos_mod.MAX_WRITE_PATHS + 1)
+        ]
+
+        resp = client.post("/api/photos/rating/undo", json={"items": items})
+
+        assert resp.status_code == 400
+
+    def test_undo_rejects_out_of_root_paths(self, client, env, monkeypatch):
+        recorder = _ExiftoolRecorder()
+        monkeypatch.setattr(photos_mod.subprocess, "run", recorder)
+        outsider = _make_jpeg(env["outside"], "victim.JPG")
+
+        resp = client.post(
+            "/api/photos/rating/undo",
+            json={"items": [{"path": str(outsider), "rating": 5}]},
+        )
+
+        assert resp.status_code == 400
+        assert recorder.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1354,11 +1620,15 @@ class TestOpenInEditor:
 
         result = client.post("/api/photos/open-in-editor", json={"path": str(photo)}).json()
 
+        # With no editor named, the default for this kind of file is used: the first
+        # `[[editors]]` entry that handles JPEGs.
+        expected = photos_mod.INSTALL.default_editor("jpeg")
+        assert expected is not None
         assert result["opened"] is True
-        assert result["editor"] == photos_mod.EXTERNAL_EDITOR_APP
+        assert result["editor"] == expected.app
         # An argument list, never a shell string: a filename containing a space or a
         # semicolon has to stay one argument.
-        assert seen == [["open", "-a", photos_mod.EXTERNAL_EDITOR_APP, str(photo)]]
+        assert seen == [["open", "-a", expected.app, str(photo)]]
 
     def test_traversal_is_refused_before_anything_is_launched(self, client, env, monkeypatch):
         seen = self._capture(monkeypatch)
@@ -1422,3 +1692,209 @@ class TestOpenInEditor:
 
         assert body["opened"] is False
         assert "not available on this platform" in body["message"]
+
+
+def _install_with_editors(*editors: library_config.EditorProfile) -> library_config.InstallConfig:
+    """A minimal InstallConfig carrying only the editors under test."""
+    return library_config.InstallConfig(
+        path=Path("/dev/null"),
+        present=True,
+        library_root=Path("/dev/null"),
+        roots={},
+        cameras=(),
+        editors=editors,
+    )
+
+
+class TestOpenInEditorRaw:
+    """
+    Handing the RAW that correlates to a JPG to an external RAW developer.
+
+    `open(1)` is never actually run here either — see `TestOpenInEditor`'s note. What is
+    real: the correlation logic (including the Photomator `_2` suffix), and the three ways
+    the RAW archive can fail to answer a request (no correlating RAW, volume unmounted,
+    root missing) — each with its own message, per `photo_flow.raw_link`.
+
+    `INSTALL` is monkeypatched in every test here rather than relying on the real one:
+    unlike `TestOpenInEditor`, which can lean on the shipped default (one JPEG editor,
+    always present), a RAW developer is never a default — the whole point of this class is
+    to be deterministic regardless of what `~/.photoflow/config.toml` says on the machine
+    running the suite.
+    """
+
+    def _capture(self, monkeypatch, returncode: int = 0, stderr: str = ""):
+        seen: List[List[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(photos_mod.subprocess, "run", fake_run)
+        return seen
+
+    def test_correlates_jpg_to_raw_including_photomator_suffix(
+        self, client, env, monkeypatch, tmp_path
+    ):
+        raws_dir = tmp_path / "RAWs"
+        raws_dir.mkdir()
+        raf = raws_dir / "2026-03-03_17-36-33_DSCF0770.RAF"
+        raf.write_bytes(b"not a real raf")
+        # The JPG carries Photomator's duplicate-export suffix — correlation_base must
+        # strip it, or this (and every re-exported photo in the real library) never finds
+        # its RAW.
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF0770_2.jpg")
+        monkeypatch.setattr(photos_mod, "RAWS_PATH", raws_dir)
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(
+                    id="developer", name="RAW Dev", app="RAW Dev", handles=("raw",)
+                )
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        result = client.post(
+            "/api/photos/open-in-editor", json={"path": str(photo), "target": "raw"}
+        ).json()
+
+        assert result["opened"] is True
+        assert result["editor"] == "RAW Dev"
+        # The RAW's own path is launched, never the JPG the request named.
+        assert seen == [["open", "-a", "RAW Dev", str(raf)]]
+
+    def test_jpg_with_no_correlating_raw(self, client, env, monkeypatch, tmp_path):
+        raws_dir = tmp_path / "RAWs"
+        raws_dir.mkdir()
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF9999.jpg")
+        monkeypatch.setattr(photos_mod, "RAWS_PATH", raws_dir)
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(id="dev", name="Dev", app="Dev", handles=("raw",))
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor", json={"path": str(photo), "target": "raw"}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["opened"] is False
+        assert "No RAW file correlates" in body["message"]
+        assert seen == []
+
+    def test_unmounted_raw_volume_is_distinguished_from_missing(self, client, env, monkeypatch):
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF0001.jpg")
+        # A made-up volume name under /Volumes: guaranteed unmounted regardless of what is
+        # actually plugged into the machine running this test.
+        monkeypatch.setattr(
+            photos_mod, "RAWS_PATH", Path("/Volumes/PhotoFlowTestVolumeNotMounted/RAWs")
+        )
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(id="dev", name="Dev", app="Dev", handles=("raw",))
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        body = client.post(
+            "/api/photos/open-in-editor", json={"path": str(photo), "target": "raw"}
+        ).json()
+
+        assert body["opened"] is False
+        assert "not mounted" in body["message"]
+        assert seen == []
+
+    def test_missing_raw_root_is_a_different_message_than_unmounted(
+        self, client, env, monkeypatch, tmp_path
+    ):
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF0002.jpg")
+        # Not under a mount container at all — root_availability calls this "missing", not
+        # "unmounted", and the two need different next actions from a human.
+        monkeypatch.setattr(photos_mod, "RAWS_PATH", tmp_path / "gone" / "RAWs")
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(id="dev", name="Dev", app="Dev", handles=("raw",))
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        body = client.post(
+            "/api/photos/open-in-editor", json={"path": str(photo), "target": "raw"}
+        ).json()
+
+        assert body["opened"] is False
+        assert "does not exist" in body["message"]
+        assert "not mounted" not in body["message"]
+        assert seen == []
+
+    def test_no_raw_editor_configured_is_opened_false_not_an_error(
+        self, client, env, monkeypatch
+    ):
+        """The default install (v0.4.13's single JPEG editor) has no RAW developer at all."""
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF0003.jpg")
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(
+                    id="shutterflow", name="Shutterflow", app="Shutterflow", handles=("jpeg",)
+                )
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor", json={"path": str(photo), "target": "raw"}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["opened"] is False
+        assert "No editor is configured for raw files" in body["message"]
+        assert seen == []
+
+    def test_an_editor_not_handling_raw_is_refused(self, client, env, monkeypatch):
+        photo = _make_jpeg(env["final"], "2026-03-03_17-36-33_DSCF0004.jpg")
+        monkeypatch.setattr(
+            photos_mod,
+            "INSTALL",
+            _install_with_editors(
+                library_config.EditorProfile(
+                    id="shutterflow", name="Shutterflow", app="Shutterflow", handles=("jpeg",)
+                )
+            ),
+        )
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor",
+            json={"path": str(photo), "target": "raw", "editor": "shutterflow"},
+        )
+
+        assert response.status_code == 400
+        assert "not configured for raw files" in response.json()["detail"]
+        assert seen == []
+
+    def test_traversal_is_refused_before_the_raw_lookup_runs(self, client, env, monkeypatch):
+        seen = self._capture(monkeypatch)
+
+        response = client.post(
+            "/api/photos/open-in-editor",
+            json={
+                "path": str(env["final"] / ".." / ".." / ".ssh" / "id_ed25519"),
+                "target": "raw",
+            },
+        )
+
+        assert response.status_code == 400
+        assert seen == []

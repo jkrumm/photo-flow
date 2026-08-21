@@ -28,7 +28,7 @@ import { IconPhotoOff } from '@tabler/icons-react'
 import { motion } from 'motion/react'
 import { MOTION_DURATION, MOTION_EASE_STANDARD } from 'basalt-ui'
 import { VX, alpha } from 'basalt-ui/tokens'
-import { thumbUrl, type PhotoRow } from '../../lib/photos'
+import { originalUrl, thumbUrl, type PhotoRow } from '../../lib/photos'
 
 /**
  * What is currently on screen. One object rather than three pieces of state, because the
@@ -59,17 +59,61 @@ const PLACEHOLDER_BLUR_PX = 12
 
 /**
  * Zoomed sizing: lift every constraint and let the `<img>` lay out at its own intrinsic
- * size, which IS the pixel size the `view` tier served — so "1:1" is true by construction.
+ * size, so the magnification is a property of the bitmap in hand rather than of a number
+ * this component computed.
  *
  * The alternative, recomputing the served box from the index's `width`/`height` and the
- * 2048 px long-edge target, has three ways to be wrong at once: it must know that those
+ * tier's long-edge target, has three ways to be wrong at once: it must know that those
  * numbers are DISPLAY dimensions (they are — `MetadataExtractor._display_size` transposes
  * an Orientation 5–8 frame, so a portrait Fuji shot stored as a 5200x3466 raster indexes as
  * 3466x5200), it must reproduce Pillow's `thumbnail()` rounding, and it silently produces a
  * transposed box for any row the index wrote before that transpose landed. The bitmap in
  * hand answers all three for free.
+ *
+ * **Which bitmap that is, is the whole point.** Serving the `view` tier here made "1:1"
+ * mean one *proxy* pixel per screen pixel — 2048 px against a 5200–6240 px master, i.e.
+ * 33–39 % of the linear resolution, upscaled. That is not a magnification of the
+ * photograph, it is a magnification of the thumbnail. `trueResolution` swaps the master's
+ * own bytes in once they have decoded, and the caller pays for it explicitly.
+ *
+ * **That swap is why {@link masterZoomSize} exists.** With both constraints merely lifted,
+ * the box is the *bitmap's* intrinsic size, and the proxy and the master do not have the
+ * same one: measured live, a zoom laid the 2048 px proxy out at `clientWidth` 2048 and then
+ * — ~2.5 s later, mid-inspection — the same `<img>` re-laid out at 5199 CSS px, a 2.54x
+ * geometry change (3.05x on the tallest masters here) with the scroll offsets not rebased,
+ * so the photograph tripled in size and jumped towards the top-left while it was being
+ * judged for sharpness. Pinning the box to the master's own display dimensions from the
+ * first frame makes the swap what this component always claimed it was: identical geometry,
+ * more pixels. The proxy is upscaled into that box for the ~2.5 s it is alone there, which
+ * is exactly the "magnification of the thumbnail" the user asked to leave — but it is a
+ * blur that resolves, not a layout that moves.
  */
 const ZOOMED_SIZE = { maxWidth: 'none', maxHeight: 'none' } as const
+
+/**
+ * The zoomed box, pinned to the master's geometry when a master is on its way.
+ *
+ * `width`/`height` come from the index's DISPLAY dimensions, which for the master are exact
+ * — no tier target, no `thumbnail()` rounding, nothing to reproduce. That is the difference
+ * from the rejected "recompute the served box" idea in {@link ZOOMED_SIZE}: the objection
+ * there was to predicting *Pillow's* output, and the master is not Pillow's output.
+ *
+ * Falls back to the intrinsic-size behaviour when the row carries no dimensions, or when
+ * `trueResolution` is off and therefore no swap will happen.
+ *
+ * @param row The selected photo, or null.
+ * @param trueResolution Whether the master will be swapped in behind this zoom.
+ * @returns A style object for the zoomed `<img>`.
+ */
+function masterZoomSize(
+  row: PhotoRow | null,
+  trueResolution: boolean,
+): { maxWidth: 'none'; maxHeight: 'none'; width?: number; height?: number } {
+  if (!trueResolution || row === null) return ZOOMED_SIZE
+  const { width, height } = row
+  if (width === null || height === null || width <= 0 || height <= 0) return ZOOMED_SIZE
+  return { ...ZOOMED_SIZE, width, height }
+}
 const FIT_SIZE = { maxWidth: '100%', maxHeight: '100%' } as const
 
 /**
@@ -99,6 +143,15 @@ export type PhotoViewerProps = {
   loading?: boolean
   zoomed: boolean
   onToggleZoom: () => void
+  /**
+   * While zoomed, fetch the master itself instead of magnifying the 2048 px proxy.
+   *
+   * Off by default so the cull loop's measured behaviour is exactly what it was: the
+   * request is 0.43–21.7 MB (median 7.3 MB) and decodes to a ~104 MB bitmap, which is not
+   * something a viewer should do because a selection changed. It is fired by `Z`, and by
+   * nothing else.
+   */
+  trueResolution?: boolean
 }
 
 /**
@@ -109,7 +162,13 @@ export type PhotoViewerProps = {
  * @param zoomed 1:1 pan mode — the image renders at its served pixel size and the surface scrolls.
  * @param onToggleZoom Fired on click / Enter / Space over the image surface.
  */
-export function PhotoViewer({ row, loading = false, zoomed, onToggleZoom }: PhotoViewerProps) {
+export function PhotoViewer({
+  row,
+  loading = false,
+  zoomed,
+  onToggleZoom,
+  trueResolution = false,
+}: PhotoViewerProps) {
   const reducedMotion = useReducedMotion()
   const sharpSrc = row === null ? null : thumbUrl(row, 'view')
   const placeholderSrc = row === null ? null : thumbUrl(row, 'grid')
@@ -213,6 +272,43 @@ export function PhotoViewer({ row, loading = false, zoomed, onToggleZoom }: Phot
     }
   }, [placeholderSrc, sharpSrc, reducedMotion, apply])
 
+  /**
+   * The master's own bytes, decoded, once a zoom has asked for them.
+   *
+   * Kept out of the `Stage` machine on purpose: that machine exists to make a *selection
+   * change* flash-free, and this is not a selection change — {@link masterZoomSize} pins
+   * the box to the master's geometry before the master exists, so the sharper frame lands
+   * in exactly the rect the proxy occupied and there is no seam to hide. Folding it in
+   * would mean a fourth layer and a fourth way for the three to tear.
+   */
+  const [fullSrc, setFullSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (row === null || !zoomed || !trueResolution) {
+      setFullSrc(null)
+      return
+    }
+    const url = originalUrl(row)
+    let cancelled = false
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = url
+    image
+      .decode()
+      .then(() => {
+        if (!cancelled) setFullSrc(url)
+        return undefined
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      // Zooming out of a frame whose 17 MB master is still in flight must not hold a
+      // connection to completion for a bitmap nobody will look at.
+      if (!image.complete) image.src = ''
+      setFullSrc(null)
+    }
+  }, [row, zoomed, trueResolution])
+
   /** Retire the under-layer once the sharp frame has fully covered it. */
   const dropPlaceholder = useCallback((): void => {
     const current = stageRef.current
@@ -226,15 +322,17 @@ export function PhotoViewer({ row, loading = false, zoomed, onToggleZoom }: Phot
     apply({ ...current, prev: null })
   }, [apply])
 
-  const zoomStyle = zoomed ? ZOOMED_SIZE : FIT_SIZE
+  const zoomStyle = zoomed ? masterZoomSize(row, trueResolution) : FIT_SIZE
   const empty = row === null
   const painted = stage !== null && (stage.sharp !== null || stage.placeholder !== null)
   const showSpinner = (loading || decoding) && !painted
-  // 1:1 pan lays the sharp frame out at its intrinsic 2048 px inside a scrolling box; an
+  // 1:1 pan lays the sharp frame out at its own intrinsic size inside a scrolling box; an
   // `inset: 0` placeholder tracks the viewport rather than that box, so it is not shown.
   // The route resets zoom on every selection change, so this never hides a live placeholder.
   const placeholder = zoomed ? null : (stage?.placeholder ?? null)
-  const sharp = stage?.sharp ?? null
+  // The master supersedes the proxy only while zoomed, and only once it has decoded — so
+  // the zoom is instant at proxy resolution and sharpens when the bytes land.
+  const sharp = zoomed && fullSrc !== null ? fullSrc : (stage?.sharp ?? null)
   const outgoing = stage?.prev ?? null
 
   return (
