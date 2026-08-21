@@ -6,14 +6,20 @@ Schema history
 v1  `photos` — one row per Final JPG, feeding the analytics screens.
 v2  `photos` gains the culling columns (root/present/dimensions/lens/label/sidecar)
     and a `trash` table backing the soft-delete of culled photos.
-v3  a `jobs` table — the durable record of every control-panel operation, so a
-    server restart no longer vaporises an in-flight job (see `api/job_store.py`).
+v3  two independent additions, shipped together:
+    * a `jobs` table — the durable record of every control-panel operation, so a
+      server restart no longer vaporises an in-flight job (see `api/job_store.py`);
+    * `photos.keywords` — the flat `XMP-dc:subject` tag set (`_PHOTOS_V3_COLUMNS`).
 
-The v2 migration is additive only: it reads ``PRAGMA table_info(photos)`` and issues
-``ALTER TABLE ... ADD COLUMN`` for whatever is missing. The live database holds
-thousands of rows, so nothing is ever dropped or recreated. v3 adds a new table, so
-``CREATE TABLE IF NOT EXISTS`` is sufficient; any LATER column on `jobs` must use the
-same PRAGMA-guarded ``ALTER TABLE`` idiom as `_migrate_photos_v2`.
+Every `photos` migration is additive only: it reads ``PRAGMA table_info(photos)`` and
+issues ``ALTER TABLE ... ADD COLUMN`` for whatever is missing. The live database holds
+thousands of rows, so nothing is ever dropped or recreated — and rebuilding from zero is
+not an available migration path, because the same file holds the `trash` table and a
+trash row is what makes a restore possible. ``_migrate_photos_v2`` applies BOTH the v2
+and the v3 column lists despite its name (it is the `photos` column migrator; renaming it
+would break nothing but was left alone rather than churn a live-database code path).
+A new TABLE needs only ``CREATE TABLE IF NOT EXISTS``; any LATER column on `jobs` must
+use the same PRAGMA-guarded idiom.
 
 `in_final` invariant
 --------------------
@@ -44,6 +50,16 @@ _PHOTOS_V2_COLUMNS: List[Tuple[str, str]] = [
     ("camera_make", "TEXT"),
     ("label", "TEXT"),
     ("has_sidecar", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+# Columns added in schema v3, same PRAGMA-guarded idiom. `keywords` holds the flat
+# `XMP-dc:subject` set, pipe-delimited AND pipe-sentinelled (`|a|b|`), so an exact tag
+# match is one `LIKE '%|a|%'` with no split and no join table. `|` is safe as the
+# delimiter because decision 0004 already reserves it as the hierarchy separator in
+# `lr:hierarchicalSubject` — it cannot occur inside a single flat tag.
+# NULL means "not indexed since v3"; the empty sentinel `|` means "indexed, no keywords".
+_PHOTOS_V3_COLUMNS: List[Tuple[str, str]] = [
+    ("keywords", "TEXT"),
 ]
 
 
@@ -85,7 +101,7 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set:
 
 def _migrate_photos_v2(conn: sqlite3.Connection) -> None:
     """
-    Add the schema-v2 culling columns to `photos` if they are missing.
+    Add the schema-v2 and -v3 culling columns to `photos` if they are missing.
 
     Idempotent and non-destructive: existing rows keep every value they had and
     pick up the column defaults ('final' / present=1), which is precisely right —
@@ -97,7 +113,7 @@ def _migrate_photos_v2(conn: sqlite3.Connection) -> None:
     existing = _existing_columns(conn, "photos")
     added_present = False
 
-    for name, ddl in _PHOTOS_V2_COLUMNS:
+    for name, ddl in _PHOTOS_V2_COLUMNS + _PHOTOS_V3_COLUMNS:
         if name in existing:
             continue
         conn.execute(f"ALTER TABLE photos ADD COLUMN {name} {ddl}")

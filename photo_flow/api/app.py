@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse
 
 from photo_flow.api.jobs import JobManager, sweep_interrupted_jobs
 from photo_flow.api.routes_analytics import router as analytics_router
+from photo_flow.api.routes_collections import router as collections_router
+from photo_flow.api.routes_config import router as config_router
 from photo_flow.api.routes_jobs import router as jobs_router
 from photo_flow.api.routes_ops import router as ops_router
 from photo_flow.api.routes_photos import router as photos_router
@@ -47,6 +49,10 @@ def create_app() -> FastAPI:
     # Culling view. Its routes sit under /api/photos so the SPA can own the
     # client-side /photos route without the catch-all below shadowing the API.
     app.include_router(photos_router)
+    # Saved collections. Same /api prefix requirement, same catch-all hazard.
+    app.include_router(collections_router)
+    # The resolved library configuration, read-only. Same /api prefix, same hazard.
+    app.include_router(config_router)
 
     # Serve the built SPA. This catch-all is registered after all API routes so those
     # match first. Any path that doesn't match an API route falls through to here:

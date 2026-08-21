@@ -171,6 +171,50 @@ def _dimensions_from_meta(meta: Dict[str, Any]) -> Tuple[Optional[int], Optional
     return None, None
 
 
+# The pipe used to both separate and bracket the stored keyword set, so an exact tag
+# match is `keywords LIKE '%|tag|%'` — no split, no join table, no ambiguity between
+# "Segeln" and "25 Segeln". Safe as a delimiter because decision 0004 reserves `|` as
+# the hierarchy separator in `lr:hierarchicalSubject`, so it cannot occur inside a flat
+# `dc:subject` tag; one appearing anyway is folded to `/` rather than allowed to split
+# a tag in half.
+KEYWORD_SEP = "|"
+
+
+def pack_keywords(values: Any) -> str:
+    """
+    Render a keyword list into the sentinelled column form.
+
+    Args:
+        values: The extracted `dc:subject` items, or None.
+
+    Returns:
+        ``"|"`` for no keywords (which still means "indexed, none found" — distinct from
+        the NULL of a row not touched since schema v3), else ``"|a|b|"``.
+    """
+    if not values:
+        return KEYWORD_SEP
+    cleaned = [str(v).replace(KEYWORD_SEP, "/").strip() for v in values]
+    kept = [v for v in cleaned if v]
+    if not kept:
+        return KEYWORD_SEP
+    return KEYWORD_SEP + KEYWORD_SEP.join(kept) + KEYWORD_SEP
+
+
+def unpack_keywords(packed: Optional[str]) -> list:
+    """
+    Read the column form back into a list.
+
+    Args:
+        packed: The stored value, or None for a row predating schema v3.
+
+    Returns:
+        The keywords, in stored order.
+    """
+    if not packed:
+        return []
+    return [part for part in packed.split(KEYWORD_SEP) if part]
+
+
 def _build_row(
     path: Path,
     stat: Any,
@@ -197,6 +241,7 @@ def _build_row(
         "camera_make": meta.get("camera_make"),
         "lens_model": meta.get("lens_model") or "",
         "label": meta.get("label") or "",
+        "keywords": pack_keywords(meta.get("keywords")),
         "dimensions": meta.get("dimensions"),
         "width": width,
         "height": height,
@@ -215,13 +260,13 @@ _UPSERT_SQL = """
     INSERT INTO photos
         (path, filename, size, mtime, date_taken, rating, iso,
          aperture_f, shutter_s, focal_mm, latitude, longitude,
-         camera_model, camera_make, lens_model, label, dimensions,
+         camera_model, camera_make, lens_model, label, keywords, dimensions,
          width, height, orientation, has_sidecar, root, present,
          in_final, published, indexed_at)
     VALUES
         (:path, :filename, :size, :mtime, :date_taken, :rating, :iso,
          :aperture_f, :shutter_s, :focal_mm, :latitude, :longitude,
-         :camera_model, :camera_make, :lens_model, :label, :dimensions,
+         :camera_model, :camera_make, :lens_model, :label, :keywords, :dimensions,
          :width, :height, :orientation, :has_sidecar, :root, :present,
          :in_final, :published, :indexed_at)
     ON CONFLICT(path) DO UPDATE SET
@@ -240,6 +285,7 @@ _UPSERT_SQL = """
         camera_make  = excluded.camera_make,
         lens_model   = excluded.lens_model,
         label        = excluded.label,
+        keywords     = excluded.keywords,
         dimensions   = excluded.dimensions,
         width        = excluded.width,
         height       = excluded.height,
@@ -284,10 +330,10 @@ def _reindex_root(
 
     existing: Dict[str, tuple] = {}
     for row in conn.execute(
-        "SELECT path, size, mtime FROM photos WHERE root = ? AND present = 1",
+        "SELECT path, size, mtime, keywords FROM photos WHERE root = ? AND present = 1",
         (root,),
     ):
-        existing[row["path"]] = (row["size"], row["mtime"])
+        existing[row["path"]] = (row["size"], row["mtime"], row["keywords"])
 
     files = scan_for_images(directory, ".JPG")
     scanned_paths = {str(f) for f in files}
@@ -307,9 +353,17 @@ def _reindex_root(
 
         stored = existing.get(path_str)
         if stored is not None:
-            stored_size, stored_mtime = stored
-            # Allow floating-point mtime fuzz of 1ms
-            if stored_size == stat.st_size and abs(stored_mtime - stat.st_mtime) < 0.001:
+            stored_size, stored_mtime, stored_keywords = stored
+            # Allow floating-point mtime fuzz of 1ms.
+            #
+            # `keywords IS NULL` forces a re-read even when the file has not changed: it is
+            # the schema-v3 backfill, and it has to ride the ordinary incremental pass
+            # because the alternative — rebuilding the index from zero — would take the
+            # `trash` table with it, and a trash row is what makes a restore possible. A
+            # file with no keywords stores the `|` sentinel, not NULL, so this self-heals
+            # exactly once per row and then never fires again.
+            unchanged = stored_size == stat.st_size and abs(stored_mtime - stat.st_mtime) < 0.001
+            if unchanged and stored_keywords is not None:
                 stats["skipped"] += 1
                 continue
             meta = MetadataExtractor.extract_metadata(file_path)

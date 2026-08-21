@@ -7,7 +7,7 @@ including XMP, EXIF, and file information.
 
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import os
 import json
 
@@ -115,6 +115,44 @@ class MetadataExtractor:
         return img.width, img.height
 
     @staticmethod
+    def _rdf_container_items(value: Any) -> List[str]:
+        """
+        Flatten an RDF container (``rdf:Bag`` / ``Seq`` / ``Alt``) into a list of strings.
+
+        Pillow's ``getxmp()`` collapses a container to ``{'Bag': {'li': ...}}`` where
+        ``li`` is a bare string for one item and a list for several — so both shapes have
+        to be handled, and a container with no items must yield ``[]`` rather than falling
+        through to the element's own text. That fall-through is exactly the bug decision
+        0004's shadow run found in the Rust reader, where an empty ``<rdf:Bag/>`` read
+        back as a keyword whose text was its own markup and would then have been written
+        into the file as a real tag.
+
+        Args:
+            value: Whatever the XMP parse produced for the property.
+
+        Returns:
+            The container's items as trimmed strings, in order, duplicates removed.
+        """
+        raw: Any = value
+        if isinstance(raw, dict):
+            for container in ("Bag", "Seq", "Alt"):
+                if container in raw:
+                    raw = raw[container]
+                    break
+            else:
+                return []
+            raw = raw.get("li", []) if isinstance(raw, dict) else raw
+        items = raw if isinstance(raw, list) else [raw]
+        out: List[str] = []
+        for item in items:
+            if isinstance(item, dict):
+                item = item.get("x-default", "")
+            text = str(item).strip() if item is not None else ""
+            if text and text not in out:
+                out.append(text)
+        return out
+
+    @staticmethod
     def _extract_xmp_metadata(img: Image.Image) -> Dict[str, Any]:
         """
         Extract XMP metadata from an image.
@@ -177,6 +215,12 @@ class MetadataExtractor:
                         if not isinstance(desc_block, dict):
                             continue
 
+                        # Extract the keywords (dc:subject — the flat tag set, 0004)
+                        if 'subject' in desc_block and "keywords" not in metadata:
+                            found = MetadataExtractor._rdf_container_items(desc_block['subject'])
+                            if found:
+                                metadata["keywords"] = found
+
                         # Extract the colour label (Bridge / Photomator write xmp:Label)
                         if 'Label' in desc_block and "label" not in metadata:
                             label = desc_block['Label']
@@ -231,6 +275,9 @@ class MetadataExtractor:
             print(f"Error extracting XMP metadata: {e}")
             # Set default values for required fields
             metadata["rating"] = 0
+
+        if "keywords" not in metadata:
+            metadata["keywords"] = []
 
         # Ensure title, description and label have defaults if not found
         if "title" not in metadata:

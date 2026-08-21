@@ -7,6 +7,24 @@ This module provides the CLI commands for the application.
 import click
 import logging
 
+# The install config is validated at import of `photo_flow.config`, and a bad one is fatal
+# by design — it names the directories the destructive operations run against. Catching it
+# HERE, before anything that pulls config in, turns a traceback into one actionable line.
+# This is the first thing the module does for that reason; do not move it below the import
+# of `workflow`, which imports config transitively.
+from photo_flow.library_config import LibraryConfigError
+
+try:
+    from photo_flow import config as _config  # noqa: F401
+except LibraryConfigError as _config_error:  # pragma: no cover - needs a broken file on disk
+    from rich.console import Console
+
+    Console(stderr=True).print(
+        f"[red]✗ photo-flow will not start with this configuration:[/red]\n  {_config_error}\n"
+        "  Fix the file, or move it aside to fall back to the built-in defaults."
+    )
+    raise SystemExit(2)
+
 from photo_flow.workflow import PhotoWorkflow
 from photo_flow.console_utils import console, success, error, info, warning, print_summary
 from rich.table import Table
@@ -406,6 +424,98 @@ def _human_bytes(num_bytes: int) -> str:
             return f"{size:.1f} {unit}" if unit != 'B' else f"{int(size)} B"
         size /= 1024.0
     return f"{size:.1f} TB"
+
+
+@photoflow.group(name='config')
+def config_group():
+    """Inspect the library configuration (paths, cameras, organisation)."""
+    pass
+
+
+@config_group.command(name='show')
+def config_show():
+    """Print the resolved configuration and where each half of it came from."""
+    from photo_flow import library_config
+
+    install = _config.INSTALL
+    organisation = _config.ORGANISATION
+
+    console.print("\n[bold]Install[/bold] — where things are on this machine")
+    console.print(f"  [dim]{install.path}[/dim]"
+                  f"{'' if install.present else '  [yellow](no file — built-in defaults)[/yellow]'}")
+    roots_table = Table(show_header=True, header_style="bold cyan")
+    roots_table.add_column("Root", style="dim")
+    roots_table.add_column("Path")
+    roots_table.add_column("On disk", justify="center")
+    for key in library_config.ROOT_KEYS:
+        path = install.roots[key]
+        mark = "[green]✓[/green]" if path.exists() else "[dim]—[/dim]"
+        roots_table.add_row(key, str(path), mark)
+    console.print(roots_table)
+
+    camera_table = Table(show_header=True, header_style="bold cyan")
+    camera_table.add_column("Camera", style="dim")
+    camera_table.add_column("Volume")
+    camera_table.add_column("Extensions")
+    camera_table.add_column("Connected", justify="center")
+    active = install.active_camera()
+    for camera in install.cameras:
+        marker = " [cyan](active)[/cyan]" if camera.id == active.id else ""
+        camera_table.add_row(
+            f"{camera.name}{marker}",
+            str(camera.camera_path),
+            " ".join(camera.extensions),
+            "[green]✓[/green]" if camera.is_connected() else "[dim]—[/dim]",
+        )
+    console.print(camera_table)
+
+    console.print("\n[bold]Library[/bold] — how these photographs are arranged")
+    console.print(f"  [dim]{organisation.path}[/dim]"
+                  f"{'' if organisation.present else '  [yellow](no settings — defaults)[/yellow]'}")
+    axes = Table(show_header=True, header_style="bold cyan")
+    axes.add_column("Axis", style="dim")
+    axes.add_column("Value")
+    axes.add_row("stage.mode", organisation.stage.mode)
+    axes.add_row("stage.tag", organisation.stage.tag)
+    axes.add_row("layout.mode", organisation.layout.mode)
+    axes.add_row("naming.template", organisation.naming.template)
+    axes.add_row("naming.apply", organisation.naming.apply)
+    console.print(axes)
+
+    for message in organisation.errors:
+        error(message)
+    if organisation.unimplemented:
+        warning("Set, but no operation reads it yet — restage and relayout are not built:")
+        for item in organisation.unimplemented:
+            console.print(f"    {item}")
+    console.print()
+
+
+@config_group.command(name='check')
+def config_check():
+    """Validate both configuration files. Exits non-zero when something is wrong."""
+    problems = list(_config.ORGANISATION.errors)
+    if problems:
+        for message in problems:
+            error(message)
+        raise SystemExit(1)
+    # Reaching this line at all means the install file already parsed and validated:
+    # `photo_flow.config` refuses to import otherwise.
+    success(f"Configuration is valid ({_config.INSTALL.path}, {_config.ORGANISATION.path})")
+
+
+@config_group.command(name='init')
+def config_init():
+    """Write a commented install config file holding exactly the current defaults."""
+    from photo_flow import library_config
+
+    try:
+        written = library_config.write_install_template()
+    except library_config.LibraryConfigError as exc:
+        error(str(exc))
+        raise SystemExit(1)
+    success(f"Wrote {written}")
+    info("Every value in it is the current default, so nothing changes until you edit it.")
 
 
 @photoflow.group(name='trash')

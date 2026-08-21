@@ -408,6 +408,24 @@ export function PhotoFilterPanel({ value, facets, onChange }: PhotoFilterPanelPr
         onChange={(next) => patch({ lens_model: next })}
       />
 
+      {/*
+        Keywords — `XMP-dc:subject`, sitting between Lens and Label because that is what it
+        is: one more indexed dimension of the photograph, not a special "album" concept.
+        The facet is what makes the point visible — this library already carries
+        hand-written album names ("25 Segeln", "Insta Post Marokko") in this field, and
+        they show up here as ordinary filter options.
+      */}
+      <MultiSelect
+        size="xs"
+        label="Keywords"
+        clearable
+        searchable
+        placeholder="Any"
+        value={value.keyword}
+        data={facetOptions(facets?.keywords, value.keyword)}
+        onChange={(next) => patch({ keyword: next })}
+      />
+
       <MultiSelect
         size="xs"
         label="Label"

@@ -55,4 +55,10 @@ export const api = {
     request<T>('GET', path, params, undefined, options),
   post: <T>(path: string, params?: QueryParams, body?: Record<string, unknown>) =>
     request<T>('POST', path, params, body),
+  /** Partial update. Used by the saved-collections CRUD; `POST`-for-everything hides
+   *  the difference between creating a collection and editing one. */
+  patch: <T>(path: string, params?: QueryParams, body?: Record<string, unknown>) =>
+    request<T>('PATCH', path, params, body),
+  /** `delete` is a reserved word, so the method is `del`. */
+  del: <T>(path: string, params?: QueryParams) => request<T>('DELETE', path, params),
 }
