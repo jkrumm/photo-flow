@@ -526,6 +526,7 @@ class PhotoWorkflow:
             'orphaned_raws': 0,
             'deleted_raws': 0,
             'deleted_camera_raws': 0,
+            'unbacked_camera_raws': 0,
             'skipped': 0,
             'errors': 0
         }
@@ -630,14 +631,53 @@ class PhotoWorkflow:
         # Step 2: Delete RAW files from camera for finalized images
         # Note: RAW files are now deleted during import, so this will typically find nothing.
         # Kept for backwards compatibility in case RAWs are manually added to camera.
-        if CAMERA_PATH.exists() and FINAL_PATH.exists():
+        #
+        # A camera RAF is deleted ONLY once its imported copy is visible in RAWS_PATH.
+        # "Its JPG reached Final" is NOT evidence the RAW was ever imported: import routes
+        # RAWs to the external SSD and SKIPS them entirely when it is unmounted, while the
+        # JPGs go to Staging and finalize normally. The card is then the only place those
+        # RAFs exist, and this step would unlink them. Observed live on 2026-08-25 with the
+        # SSD unmounted: 328 of 707 camera RAFs matched a Final JPG and had no backup.
+        # RAWS_PATH unavailable means we cannot verify anything, so we delete nothing.
+        if CAMERA_PATH.exists() and FINAL_PATH.exists() and not RAWS_PATH.exists():
+            reporter.log(
+                "warning",
+                f"RAWs folder unavailable at {RAWS_PATH} — skipping camera RAW deletion "
+                "(cannot verify the RAWs were imported)",
+            )
+        elif CAMERA_PATH.exists() and FINAL_PATH.exists():
             final_jpgs = scan_for_images(FINAL_PATH, '.JPG')
             # Use extract_original_base to handle both old and timestamp-renamed files
             final_jpg_bases = {extract_original_base(jpg_file.name) for jpg_file in final_jpgs}
 
+            # Bases we can actually see on the RAW drive. Both sides are camera-originated
+            # names (no Photomator suffix), so extract_original_base matches them exactly.
+            imported_raw_bases = {
+                extract_original_base(raf.name)
+                for raf in RAWS_PATH.glob('*.RAF')
+                if is_valid_image_file(raf)
+            }
+
             camera_files = self.file_manager.scan_camera_files()
             camera_raws = camera_files.get('.RAF', [])
-            finalized_raws = [raw for raw in camera_raws if extract_original_base(raw.name) in final_jpg_bases]
+            finalized_raws = [
+                raw for raw in camera_raws
+                if extract_original_base(raw.name) in final_jpg_bases
+                and extract_original_base(raw.name) in imported_raw_bases
+            ]
+
+            unbacked = [
+                raw for raw in camera_raws
+                if extract_original_base(raw.name) in final_jpg_bases
+                and extract_original_base(raw.name) not in imported_raw_bases
+            ]
+            if unbacked:
+                reporter.log(
+                    "warning",
+                    f"Keeping {len(unbacked)} camera RAW(s) whose JPG is in Final but which "
+                    "have no copy in the RAWs folder — run import with the SSD connected",
+                )
+                stats['unbacked_camera_raws'] = len(unbacked)
 
             if finalized_raws:
                 reporter.log("info", f"Deleting {len(finalized_raws)} RAW files from camera")
