@@ -193,10 +193,63 @@ def _run_backup(source: BackupSource, dry_run: bool, reporter: Any) -> Dict[str,
             results.append(method(dry_run=dry_run, reporter=reporter))
         return {
             "sources": [r.get("source", "unknown") for r in results],
+            # Which sources did NOT sync. `all_successful` alone cannot say, and a
+            # partial backup is exactly the case where the answer matters.
+            "failed_sources": [
+                r.get("source", "unknown")
+                for r in results
+                if not r.get("sync_successful", False)
+            ],
             "total_scanned": sum(r.get("scanned", 0) for r in results),
             "all_successful": all(r.get("sync_successful", False) for r in results),
             "errors": sum(r.get("errors", 0) for r in results),
         }
+
+
+class BackupIncomplete(RuntimeError):
+    """
+    A backup returned normally but did not sync everything.
+
+    Every backup path reports a failure by RETURNING `sync_successful: False` rather
+    than raising, and the job runner marks any function that returns as `done`. So a
+    `backup:all` that skipped two of three sources (SSD unmounted — observed 2026-08-22,
+    5 s runtime, `errors: 2`) was recorded `done`, announced as complete, and credited
+    to `last_run.json` as a fresh backup. Raising is what makes the job `failed`.
+
+    Carries the partial result so the failure still reports what DID sync.
+    """
+
+    def __init__(self, message: str, result: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.result = result
+
+
+def _backup_failure_reason(result: Dict[str, Any]) -> Optional[str]:
+    """Describe why `result` is not a complete backup, or None if it is."""
+    if "all_successful" in result:  # the "all" aggregate
+        if result.get("all_successful"):
+            return None
+        failed = result.get("failed_sources") or ["unknown"]
+        return f"backup incomplete — these sources did not sync: {', '.join(failed)}"
+    if not result.get("sync_successful", False):
+        return f"backup incomplete — {result.get('source', 'unknown')} did not sync"
+    return None
+
+
+def _run_backup_checked(source: BackupSource, reporter: Any) -> Dict[str, Any]:
+    """
+    Job-path wrapper: a backup that did not sync is a FAILED job, not a done one.
+
+    Only the job path is wrapped — the dry-run preview returns its dict to the caller
+    synchronously and must never raise.
+    """
+    result = _run_backup(source, dry_run=False, reporter=reporter)
+    reason = _backup_failure_reason(result)
+    # A cancelled backup also reports sync_successful: False. That is `cancelled`, not
+    # `failed`, and the runner already decides it from the cancel event — so leave it be.
+    if reason and not reporter.is_cancelled():
+        raise BackupIncomplete(reason, result)
+    return result
 
 
 async def _enqueue_job(
@@ -377,7 +430,7 @@ async def op_backup(
     return await _enqueue_job(
         request,
         f"backup:{_source}",
-        lambda reporter, s=_source: _run_backup(s, dry_run=False, reporter=reporter),
+        lambda reporter, s=_source: _run_backup_checked(s, reporter=reporter),
     )
 
 

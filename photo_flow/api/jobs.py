@@ -682,7 +682,10 @@ class JobManager:
         except Exception as exc:
             job.status = "failed"
             job.error = str(exc)
-            done_event = {"type": "done", "result": None, "error": str(exc)}
+            # An op may attach a partial result to its failure (see BackupIncomplete):
+            # "final synced, raws did not" is strictly more useful than a bare error.
+            job.result = getattr(exc, "result", None)
+            done_event = {"type": "done", "result": job.result, "error": str(exc)}
         finally:
             # Cancel watchdog — no-op if it already fired or job exceeded the timeout.
             watchdog_task.cancel()
