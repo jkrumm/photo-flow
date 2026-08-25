@@ -412,7 +412,10 @@ StatusReport:
    it. This sweep moves such a sidecar to Final if its JPG is there, and **leaves + warns** if the
    JPG exists nowhere — irreplaceable history is never auto-deleted. `._*` AppleDouble forks are
    ignored. Runs on the "no photos in staging" early return too, and is skipped when cancelled.
-3. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected)
+3. **Delete camera RAWs**: Matching RAFs for finalized JPGs (if camera connected) — but ONLY
+   where the imported copy is visible in `RAWS_PATH`. A JPG in Final is not evidence its RAW
+   was imported (import skips RAWs when the SSD is unmounted), and the card is the only other
+   copy. `RAWS_PATH` unavailable ⇒ nothing is deleted.
    - **Output**: Info messages for each deletion
 4. **Cleanup orphaned RAWs**: Local RAFs whose base matches no JPG in **Final OR Staging**
    (`compute_raw_keep_bases`, Photomator-suffix tolerant). Staging is included so RAWs for
@@ -426,7 +429,8 @@ StatusReport:
     'edits_moved': int,          # .photo-edit sidecars moved alongside their JPGs
     'orphaned_raws': int,        # Local RAWs found without Final JPG
     'deleted_raws': int,         # Local orphaned RAWs deleted
-    'deleted_camera_raws': int,  # Camera RAWs deleted
+    'deleted_camera_raws': int,  # Camera RAWs deleted (only those verified in RAWS_PATH)
+    'unbacked_camera_raws': int, # Camera RAWs KEPT — finalized JPG but no copy in RAWS_PATH
     'skipped': int,
     'errors': int
 }
@@ -1133,7 +1137,49 @@ pipx uninstall photo-flow
    proceeds — an unreachable health endpoint must not be able to block a deploy forever.
    Verified end-to-end against a real running backup, not a fixture: the script skipped, the
    stamp kept its old mtime, and the job survived to completion.
-2. **The RAW hand-off met a real RAF** — see the v0.4.19 entry below, corrected in place. The
+2. **Finalize no longer deletes a camera RAW it cannot prove was imported.** Step 2 unlinked
+   any camera RAF whose base matched a Final JPG. That is not evidence the RAW was ever
+   imported: `import_from_camera` routes RAWs to the external SSD and **skips them entirely**
+   when it is unmounted, while the JPGs go to Staging and finalize normally. The card is then
+   the only place those RAFs exist — and step 2 deletes with no preview and no confirmation.
+   Measured live on 2026-08-25 with the SSD unmounted: **328 of 707** camera RAFs matched a
+   Final JPG and had no copy anywhere else. A camera RAF is now deleted only when its imported
+   copy is **visible in `RAWS_PATH`**; the rest are kept and counted in the new
+   `unbacked_camera_raws` stat with a warning naming the fix (run import with the SSD
+   connected). `RAWS_PATH` unavailable means nothing can be verified, so **nothing is deleted**
+   — the same "cannot verify ⇒ refuse" rule the root guard uses. `tests/test_finalize_camera_raws.py`
+   (6 cases); the two safety cases fail against the pre-fix code on their first assertion.
+3. **A backup that did not sync now reports `failed`, not `done`.** Every backup path signals
+   failure by RETURNING `sync_successful: False` rather than raising, and the job runner marks
+   any function that returns normally as `done` — so a partial backup was recorded `done`,
+   announced as complete, and credited to `last_run.json` as fresh. Observed in the durable
+   history: the 2026-08-22 `backup:all` ran **5 seconds**, returned `all_successful: false,
+   errors: 2` (RAWs and Videos never ran — the SSD was unmounted), and sits there as `done`.
+   This was never `all`-specific: `backup:raws` with the SSD unmounted returns
+   `{'sync_successful': False, 'errors': 1}` and reported `done` too.
+   - `_run_backup_checked` wraps **only the job path** and raises `BackupIncomplete`; the
+     dry-run preview returns its dict synchronously and must never raise.
+   - The exception **carries the partial result**, and `jobs.py` now reads `exc.result`, so a
+     failure still reports what DID sync instead of a bare error string. The `all` aggregate
+     gained `failed_sources` — `all_successful` alone cannot name them.
+   - **A cancelled backup also returns `sync_successful: False`**, and that is `cancelled`, not
+     `failed`. The wrapper checks `reporter.is_cancelled()` and stays quiet, leaving the status
+     to the runner's cancel event. `tests/test_backup_job_status.py` (8 cases, including
+     end-to-end through the job runner — the helper raising is only half the fix; the STATUS is
+     what was broken).
+4. **The homelab Tailscale link is relayed, not direct** — `tailscale ping` answers
+   `via DERP(nue)`, `direct connection not established`, while `mini` and `vps` both show
+   `active; direct`. Measured backup throughput 7.5 → 4.8 MiB/s, which is what makes a 26 GB
+   RAWs push a 66-minute job. Recorded, not fixed: it is a homelab-side NAT/UDP-41641 question,
+   not a photo-flow one. Do not tune rclone concurrency to compensate — see item 5.
+5. **The backup's rclone flags are a 1Password-prompt amplifier.** `SSH_AUTH_SOCK` points at
+   the 1Password agent, so every SSH authentication needs an authorization, and
+   `_run_backup_rclone` runs `--sftp-key-use-agent --transfers=8 --sftp-concurrency=64` — up to
+   64 channels, each wanting its own signature. A single backup becomes a stream of approval
+   dialogs. The fix is the agent's auto-authorize setting, **not** lowering concurrency: the
+   link is already relay-capped (item 4) and throttling it further pays for a UI annoyance with
+   a slower transfer of irreplaceable files.
+6. **The RAW hand-off met a real RAF** — see the v0.4.19 entry below, corrected in place. The
    short version: 2 364/2 364 Final JPGs resolve, a real 30 MB RAF opened in a real RAW
    developer, the archive was byte-count-unchanged afterwards, and the reason nobody had seen
    the feature work is that **the default install ships no RAW editor at all**, so its half of

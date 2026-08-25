@@ -68,6 +68,13 @@ so it is the one path that must be reversible:
   keep-set, so `finalize` step 4 — which unlinks orphaned RAWs with no preview and no
   confirmation — cannot destroy the RAW of a photo you can still restore. The RAW becomes an
   orphan only once the entry is purged.
+- **A camera RAW is deleted only once its import is visible.** `finalize` step 2 unlinks a RAF
+  from the card, and the card is the only other place it exists. "Its JPG reached Final" does not
+  prove the RAW was imported — `import` routes RAWs to the external SSD and skips them entirely
+  when it is unmounted, while the JPGs go to Staging and finalize normally. Step 2 therefore
+  requires the imported copy to be present in `RAWS_PATH`; the rest are kept and counted in
+  `unbacked_camera_raws`. An unavailable `RAWS_PATH` verifies nothing, so nothing is deleted.
+  Measured on 2026-08-25 with the SSD unmounted: 328 of 707 card RAFs were in this state.
 - **Retention keys off `trashed_at`, never file mtime.** A photo keeps its capture-time mtime, so
   an mtime sweep would purge a freshly-culled batch of old photos immediately. `purge` refuses to
   touch anything inside the retention window and prompts before deleting.
