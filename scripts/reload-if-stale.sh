@@ -55,6 +55,44 @@ if [[ -z "$web_dirty" && -z "$py_dirty" ]]; then
   exit 0
 fi
 
+# A redeploy RESTARTS the daemon, and a restart kills whatever it was doing. The jobs the
+# panel runs are minutes long and touch irreplaceable files — a `backup:final` rclone
+# transfer, an `import` that moves originals off the card — so ending an agent turn on top
+# of one turns a routine deploy into an interrupted transfer. (v0.4.10 makes that visible
+# rather than silent: the job comes back `interrupted` and `last_run.json` is corrected.
+# Visible is not the same as harmless.) Observed for real on 2026-08-25, where a restart
+# issued to pick up a config change killed a `backup:staging` 106 s in.
+#
+# So: if the daemon reports a job queued or running, skip this turn entirely and leave the
+# stamp alone. The next turn redeploys — the change is a few minutes late, which is the
+# cheaper of the two failures by a wide margin.
+#
+# A daemon that does not answer cannot be running a job, so a failed probe proceeds. The
+# probe is deliberately generous on connect (2 s) and quiet on error: an unavailable
+# health endpoint must not be able to block a deploy forever.
+job_in_flight() {
+  local payload
+  payload="$(curl -sf -m 2 http://127.0.0.1:7717/jobs 2>/dev/null)" || return 1
+  printf '%s' "$payload" | python3 -c '
+import json, sys
+
+try:
+    jobs = json.load(sys.stdin).get("jobs", [])
+except Exception:          # a malformed body is not evidence of a running job
+    sys.exit(1)
+busy = [j for j in jobs if j.get("status") in ("queued", "running")]
+if not busy:
+    sys.exit(1)
+print(", ".join("%s (%s)" % (j.get("op", "?"), j.get("status")) for j in busy))
+' 2>/dev/null
+}
+
+if busy="$(job_in_flight)"; then
+  echo "photoflow: skipping redeploy — a job is in flight: ${busy}"
+  echo "photoflow: the stamp is untouched, so the next turn will deploy this change"
+  exit 0
+fi
+
 mkdir -p "$(dirname "$STAMP")"
 
 if [[ -n "$web_dirty" ]]; then

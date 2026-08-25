@@ -1111,13 +1111,33 @@ pipx uninstall photo-flow
 
 ---
 
-**Version**: 0.4.19
+**Version**: 0.4.20
 **Last Updated**: August 2026
 **Purpose**: Optimized for AI coding agents (Claude Code, Cursor, etc.)
 
 ---
 
 ## Recent Changes
+
+### v0.4.20 - The Redeploy That Killed a Backup (August 2026)
+
+1. **`scripts/reload-if-stale.sh` refuses to redeploy while a job is in flight.** The script
+   ends every agent turn by restarting the daemon, and a restart kills whatever the daemon was
+   doing — the ops it runs are minutes long and move irreplaceable files. This is not
+   hypothetical: on 2026-08-25 a `service-restart` issued to pick up a config change killed a
+   `backup:staging` **106 s in**. v0.4.10 made that visible rather than silent (the job comes
+   back `interrupted`, `last_run.json` is corrected, the advisor stops buying staleness credit
+   from it) — visible is not harmless. The script now probes `GET /jobs`, and on a `queued` or
+   `running` job prints what it is waiting on, exits 0, and **leaves the stamp alone** so the
+   next turn deploys. A daemon that does not answer cannot be running a job, so a failed probe
+   proceeds — an unreachable health endpoint must not be able to block a deploy forever.
+   Verified end-to-end against a real running backup, not a fixture: the script skipped, the
+   stamp kept its old mtime, and the job survived to completion.
+2. **The RAW hand-off met a real RAF** — see the v0.4.19 entry below, corrected in place. The
+   short version: 2 364/2 364 Final JPGs resolve, a real 30 MB RAF opened in a real RAW
+   developer, the archive was byte-count-unchanged afterwards, and the reason nobody had seen
+   the feature work is that **the default install ships no RAW editor at all**, so its half of
+   the Tools panel renders empty until `[[editors]]` names one.
 
 ### v0.4.19 - Undoable Ratings, a Hardened Root Guard, and the RAW Hand-off (August 2026)
 
@@ -1189,8 +1209,21 @@ fixed in the same pass — item 1 is the most consequential change in this relea
    section and the stage right-click menu render one button per configured editor per kind
    (JPEG editors, then a RAW section); `E` and the single-editor case still resolve to the
    server default with no picker. Tests: `tests/test_raw_link.py` (6) + `TestOpenInEditorRaw`
-   (7). **NOT verified live** — `/Volumes/EXT` is unmounted, so no real RAF was ever opened by
-   a real RAW developer; only a monkeypatched `open` and a monkeypatched root were exercised.
+   (7). **Verified live 2026-08-25**, once `/Volumes/EXT` was mounted: `find_raw` resolved
+   **2 364 of 2 364** Final JPGs to a real RAF against the 4 659-file archive (~22 ms a
+   lookup — it rescans the root per call, which is fine for one click and would not be for a
+   sweep), and `POST /api/photos/open-in-editor` with `target: "raw"` opened a 30 MB
+   `.RAF` in a real RAW developer. The archive was unchanged afterwards: 4 659 files, zero
+   non-`.RAF`.
+   **The default install ships no RAW editor, deliberately** (`library_config.py`'s
+   `DEFAULT_EDITORS` is the one JPEG row v0.4.13 hardcoded), so the RAW section of the Tools
+   panel is empty until `~/.photoflow/config.toml` names one. Listing `[[editors]]` REPLACES
+   that default rather than extending it — a config naming only a RAW developer silently
+   loses the JPEG hand-off. Order is precedence: the first profile handling a kind is what
+   `E` and the server default resolve to. Worth knowing when picking one: darktable writes
+   `<name>.RAF.xmp` sidecars back into the RAW archive on import, which the orphan sweep
+   ignores (it scans `.RAF` only) but which does start adding files to an otherwise
+   read-only tree; Affinity Photo writes nothing unless told to.
 4. **Four falsified numbers, corrected where they were written**, found by the same
    adversarial pass: `photos_original`'s full-tier cost docstring (real: 365–812 ms, median
    630; 3.07–9.51 MB; 26 MP portrait masters 766–812 ms and 9.0–9.5 MB — both upper bounds had
